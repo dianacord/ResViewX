@@ -4,7 +4,11 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
 
-def compute_fsc(vol1, vol2, mask=None, log_fn=None):
+def compute_fsc(vol1, vol2, mask=None, log_fn=None, progress_callback=None):
+    def report(frac):
+        if progress_callback is not None:
+            progress_callback(frac)
+
     if vol1.shape != vol2.shape:
         raise ValueError(f"Volume shapes must match: {vol1.shape} vs {vol2.shape}")
 
@@ -14,6 +18,7 @@ def compute_fsc(vol1, vol2, mask=None, log_fn=None):
     if mask is not None:
         vol1 = vol1 * mask
         vol2 = vol2 * mask
+    report(0.15)
 
     # Run both FFTs in parallel — numpy FFT releases the GIL so threads help
     with ThreadPoolExecutor(max_workers=2) as ex:
@@ -21,6 +26,7 @@ def compute_fsc(vol1, vol2, mask=None, log_fn=None):
         f2 = ex.submit(np.fft.rfftn, vol2)
         ft1 = f1.result()
         ft2 = f2.result()
+    report(0.55)
 
     freq_grid = _radial_freq_grid(vol1.shape)
 
@@ -34,6 +40,7 @@ def compute_fsc(vol1, vol2, mask=None, log_fn=None):
     cross  = np.real(ft1_flat * np.conj(ft2_flat))
     power1 = np.abs(ft1_flat) ** 2
     power2 = np.abs(ft2_flat) ** 2
+    report(0.8)
 
     valid = (shell_idx >= 0) & (shell_idx < n_shells)
     C_s = np.bincount(shell_idx[valid], weights=cross[valid],  minlength=n_shells)
@@ -43,6 +50,7 @@ def compute_fsc(vol1, vol2, mask=None, log_fn=None):
     denom = np.sqrt(A_s * B_s)
     fsc_values = np.where(denom > 0, C_s / denom, 0.0)
     fsc_values[0] = 1.0  # DC component
+    report(1.0)
 
     if log_fn is not None:
         centers = (bins[:-1] + bins[1:]) / 2.0

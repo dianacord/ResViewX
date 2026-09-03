@@ -95,6 +95,12 @@ class FSCTool(ToolInstance):
         self._map2_combo = QComboBox()
         self._mask_combo = QComboBox()
         self._struct_combo = QComboBox()
+        # Keep all dropdowns the same width regardless of item text length
+        for combo in (self._map1_combo, self._map2_combo,
+                      self._mask_combo, self._struct_combo):
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(12)
+            combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._map1_combo.currentIndexChanged.connect(self._auto_fill_pixel_size)
         self._map2_combo.currentIndexChanged.connect(self._auto_fill_pixel_size)
 
@@ -150,9 +156,9 @@ class FSCTool(ToolInstance):
         layout.addWidget(self._res_label)
 
         self._progress = QProgressBar()
-        self._progress.setRange(0, 0)   # indeterminate / busy animation
+        self._progress.setRange(0, 100)
         self._progress.setTextVisible(True)
-        self._progress.setFormat("Computing FSC…")
+        self._progress.setFormat("Computing FSC…  %p%")
         self._progress.setVisible(False)
         layout.addWidget(self._progress)
 
@@ -243,6 +249,13 @@ class FSCTool(ToolInstance):
         self._lr_compute_btn = QPushButton("Compute Local Resolution")
         self._lr_compute_btn.clicked.connect(self._on_lr_compute)
         layout.addWidget(self._lr_compute_btn)
+
+        self._lr_progress = QProgressBar()
+        self._lr_progress.setRange(0, 100)
+        self._lr_progress.setTextVisible(True)
+        self._lr_progress.setFormat("Computing local resolution…  %p%")
+        self._lr_progress.setVisible(False)
+        layout.addWidget(self._lr_progress)
 
         self._lr_status_label = QLabel("")
         self._lr_status_label.setAlignment(Qt.AlignCenter)
@@ -366,6 +379,9 @@ class FSCTool(ToolInstance):
         self._lr_compute_btn.setEnabled(False)
         self._lr_status_label.setText("Computing…")
         self._lr_status_label.setStyleSheet("")
+        self._lr_progress.setValue(0)
+        self._lr_progress.setVisible(True)
+        QApplication.processEvents()
         self.session.logger.status("Computing local resolution (fake prototype)…")
 
         try:
@@ -373,12 +389,14 @@ class FSCTool(ToolInstance):
             vol2 = map2.data.matrix().astype(np.float32, copy=True) if map2 is not None else None
             mask_arr = mask.data.matrix().astype(np.float32, copy=True) if mask is not None else None
 
+            cb = self._make_progress_cb(self._lr_progress, "Computing local resolution…")
             output = fake_monores(
                 vol1, vol2, mask_arr,
                 min_res=self._lr_minres_spin.value(),
                 max_res=self._lr_maxres_spin.value(),
                 step=self._lr_step_spin.value(),
                 significance=self._lr_signif_spin.value(),
+                progress_callback=cb,
             )
             self._lr_output = output
 
@@ -409,6 +427,7 @@ class FSCTool(ToolInstance):
             self._lr_status_label.setStyleSheet("color: #c0392b;")
         finally:
             self._lr_compute_btn.setEnabled(True)
+            self._lr_progress.setVisible(False)
             self.session.logger.status("Local resolution done.")
 
     def _on_lr_update_histogram(self):
@@ -563,6 +582,17 @@ class FSCTool(ToolInstance):
             f"by local resolution, range {res_min:.1f}–{res_max:.1f} Å.\n"
             f"Resolution values volume: #{localres_vol.id_string} (hidden)"
         )
+
+    def _make_progress_cb(self, progressbar, prefix):
+        """Return a callback(fraction 0..1) that drives a QProgressBar and
+        also prints the percentage to the ChimeraX status line."""
+        def cb(frac):
+            pct = int(max(0.0, min(1.0, frac)) * 100)
+            progressbar.setValue(pct)
+            progressbar.setFormat(f"{prefix}  %p%")
+            self.session.logger.status(f"{prefix} {pct}%")
+            QApplication.processEvents()   # repaint mid-computation
+        return cb
 
     def _matplotlib_palette(self, cmap_name, vmin, vmax, n=9):
         """Build a ChimeraX palette string sampled from a matplotlib colormap.
@@ -733,6 +763,7 @@ class FSCTool(ToolInstance):
 
         self.session.logger.status("Computing FSC …")
         self._compute_btn.setEnabled(False)
+        self._progress.setValue(0)
         self._progress.setVisible(True)
         QApplication.processEvents()   # force the bar to paint before we block
 
@@ -762,8 +793,8 @@ class FSCTool(ToolInstance):
                 pass
 
             threshold = self._thresh_spin.value()
-            fsc_values = compute_fsc(vol1, vol2, mask_arr,
-                                     log_fn=self.session.logger.info)
+            cb = self._make_progress_cb(self._progress, "Computing FSC…")
+            fsc_values = compute_fsc(vol1, vol2, mask_arr, progress_callback=cb)
             resolution = find_resolution(fsc_values, pixel_size, threshold=threshold)
 
             self._fsc_values = fsc_values
@@ -786,12 +817,6 @@ class FSCTool(ToolInstance):
                 )
             self.session.logger.info("\n".join(lines))
 
-            freq_axis = centers[1:] / pixel_size
-            self.session.logger.info(
-                "Frequency axis (1/Å):\n  " +
-                "  ".join(f"{v:.4f}" for v in freq_axis)
-            )
-
             if resolution is not None:
                 res_str = f"{resolution:.2f} Å"
                 self._res_label.setText(
@@ -804,7 +829,6 @@ class FSCTool(ToolInstance):
                 self._res_label.setText(
                     f"Resolution at FSC={threshold:.3f}:  N/A (FSC > {threshold:.3f} throughout)"
                 )
-                self.session.logger.info(f"FSC never crosses {threshold:.3f}.")
 
             elapsed = time.perf_counter() - _t0
             self.session.logger.info(f"FSC computed in {elapsed:.2f} s.")
