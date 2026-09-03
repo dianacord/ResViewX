@@ -1,0 +1,17 @@
+<BundleInfo name="ChimeraX-AlignMetric"
+            version="1.0"
+            package="chimerax.align_metric"
+            minSessionVersion="1"
+            maxSessionVersion="1">
+  <Author>Diana Cordovez</Author>
+  <Synopsis>Align two protein structures and report RMSD</Synopsis>
+  <Categories>
+    <Category name="Structure Analysis"/>
+  </Categories>
+  <Dependencies>
+    <Dependency name="ChimeraX-Core" version=">=1.0"/>
+    <Dependency name="ChimeraX-Atomic" version=">=1.0"/>
+    <Dependency name="ChimeraX-MatchMaker" version=">=1.0"/>
+  </Dependencies>
+  <Providers manager="commands" name="alignMetric"/>
+</BundleInfo>
