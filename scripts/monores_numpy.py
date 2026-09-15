@@ -12,6 +12,23 @@ PI = math.pi
 DBL_MIN = 2.2250738585072014e-308
 MAX_RESOLUTION_CANDIDATES = 100000
 
+# Use scipy's FFT with multi-core support when available (workers=-1 spreads
+# each transform across all CPU cores). Falls back to numpy if scipy is absent.
+try:
+    from scipy import fft as _sfft
+
+    def rfftn(x, axes=None):
+        return _sfft.rfftn(x, axes=axes, workers=-1)
+
+    def irfftn(x, s=None, axes=None):
+        return _sfft.irfftn(x, s=s, axes=axes, workers=-1)
+except ImportError:
+    def rfftn(x, axes=None):
+        return np.fft.rfftn(x, axes=axes)
+
+    def irfftn(x, s=None, axes=None):
+        return np.fft.irfftn(x, s=s, axes=axes)
+
 
 # ---------------------------------------------------------------------------
 # scalar helpers (c_functions.py)
@@ -109,13 +126,13 @@ def fourier_freqs_3d(real_shape):
 
 def real_gaussian_filter(volume: np.ndarray, sigma: float) -> np.ndarray:
     nz, ny, nx = volume.shape
-    spec = np.fft.rfftn(volume, axes=(-3, -2, -1))
+    spec = rfftn(volume, axes=(-3, -2, -1))
     uz = fft_idx2digfreq_t(np.arange(nz), nz).reshape(-1, 1, 1)
     uy = fft_idx2digfreq_t(np.arange(ny), ny).reshape(1, -1, 1)
     ux = fft_idx2digfreq_t(np.arange(nx // 2 + 1), nx).reshape(1, 1, -1)
     w2 = uz * uz + uy * uy + ux * ux
     spec = spec * np.exp(-(PI * PI) * w2 * (sigma * sigma))
-    return np.fft.irfftn(spec, s=(nz, ny, nx), axes=(-3, -2, -1))
+    return irfftn(spec, s=(nz, ny, nx), axes=(-3, -2, -1))
 
 
 # ---------------------------------------------------------------------------
@@ -175,10 +192,10 @@ def monogenic_amplitude_3d_fourier(myfftV, iu, fx, fy, fz, real_shape):
     nz, ny, nx = real_shape
     F = myfftV
     F_aux = (-1j) * F * iu
-    amplitude = np.fft.irfftn(F, s=(nz, ny, nx), axes=(-3, -2, -1))
+    amplitude = irfftn(F, s=(nz, ny, nx), axes=(-3, -2, -1))
     amplitude = amplitude * amplitude
     for u in (fx.reshape(1, 1, -1), fy.reshape(1, -1, 1), fz.reshape(-1, 1, 1)):
-        comp = np.fft.irfftn(u * F_aux, s=(nz, ny, nx), axes=(-3, -2, -1))
+        comp = irfftn(u * F_aux, s=(nz, ny, nx), axes=(-3, -2, -1))
         amplitude = amplitude + comp * comp
     return np.sqrt(amplitude)
 
@@ -196,16 +213,16 @@ def amplitude_mono_sig_3d_lpf(myfftV, freq, freqH, freqL, iu, fx, fy, fz, real_s
     F = myfftV * gain
     F_aux = (-1j) * F * iu
 
-    amplitude = np.fft.irfftn(F, s=(nz, ny, nx), axes=(-3, -2, -1))
+    amplitude = irfftn(F, s=(nz, ny, nx), axes=(-3, -2, -1))
     amplitude = amplitude * amplitude
 
     for u in (fx.reshape(1, 1, -1), fz.reshape(-1, 1, 1), fy.reshape(1, -1, 1)):
-        comp = np.fft.irfftn(u * F_aux, s=(nz, ny, nx), axes=(-3, -2, -1))
+        comp = irfftn(u * F_aux, s=(nz, ny, nx), axes=(-3, -2, -1))
         amplitude = amplitude + comp * comp
 
     amplitude = np.sqrt(amplitude)
 
-    spec = np.fft.rfftn(amplitude, axes=(-3, -2, -1))
+    spec = rfftn(amplitude, axes=(-3, -2, -1))
     raised_w = _c_div(PI, freqL - freq)
     lp_ramp = 0.5 * (1.0 + np.cos(raised_w * (un - freq)))
     in_lp = (un <= freqL) & (un >= freq)
@@ -213,7 +230,7 @@ def amplitude_mono_sig_3d_lpf(myfftV, freq, freqH, freqL, iu, fx, fy, fz, real_s
     lp_gain = np.where(in_lp, lp_ramp, np.ones_like(lp_ramp))
     lp_gain = np.where(over, np.zeros_like(lp_gain), lp_gain)
     spec = spec * lp_gain
-    return np.fft.irfftn(spec, s=(nz, ny, nx), axes=(-3, -2, -1))
+    return irfftn(spec, s=(nz, ny, nx), axes=(-3, -2, -1))
 
 
 def refine_mask(myfftV, iu, fx, fy, fz, mask, real_shape):
@@ -389,7 +406,7 @@ def run_monores(v1, v2, mask_np, sampling_rate, max_res, step=0.25,
         v2 = np.asarray(v2, dtype=dt)
         input_vol = 0.5 * (v1 + v2)
         noise_vol = (v1 - v2) / 2.0
-        fftN = np.fft.rfftn(noise_vol, axes=(-3, -2, -1))
+        fftN = rfftn(noise_vol, axes=(-3, -2, -1))
         half_maps_given = True
     else:
         input_vol = v1
@@ -406,7 +423,7 @@ def run_monores(v1, v2, mask_np, sampling_rate, max_res, step=0.25,
     if half_maps_given and noiseonlyinhalves:
         mask[mask < 1] = -1
 
-    fftV = np.fft.rfftn(input_vol, axes=(-3, -2, -1))
+    fftV = rfftn(input_vol, axes=(-3, -2, -1))
     iu, fx, fy, fz = fourier_freqs_3d(real_shape)
 
     freq_step = step if step >= 0.25 else 0.25

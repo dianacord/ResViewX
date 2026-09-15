@@ -1,42 +1,48 @@
-"""Local resolution — skeleton with fake prototype function.
+"""Local resolution — real MonoRes (pure numpy, no torch).
 
-Parameter names mirror the real MonoRes protocol (xmipp) so the UI is ready
-for the real algorithm to drop in later:
-  min_res      — high-resolution limit (Å), default 0/1
-  max_res      — low-resolution limit (Å)
-  step         — resolution sampling interval (Å), default 0.5
-  significance — hypothesis test stringency, default 0.95
+Thin wrapper over monores_core.run_monores that returns a single per-voxel
+local-resolution array with NaN outside the resolved region, which is what the
+GUI histogram and coloring expect.
 """
 
-import time
 import numpy as np
 
 
-def fake_monores(map1, map2=None, mask=None,
-                 min_res=1.0, max_res=15.0, step=0.5, significance=0.95,
-                 progress_callback=None):
-    """Fake local resolution output for UI prototyping.
+def monores(map1, map2=None, mask=None,
+            sampling_rate=1.0, max_res=15.0, step=0.5, significance=0.95,
+            progress_callback=None):
+    """Compute a local-resolution map with MonoRes.
 
-    Returns a random array the same shape as map1 with values in [2, 12] Å.
-    Replace this with the real MonoRes / local resolution algorithm later.
-    Voxels outside the mask (mask == 0) are set to NaN so they are ignored
-    downstream, mimicking how real local-resolution only reports inside the mask.
+    Parameters
+    ----------
+    map1 : ndarray              first half map (or the full map in single-map mode)
+    map2 : ndarray or None      second half map (optional)
+    mask : ndarray              binary mask (REQUIRED by MonoRes)
+    sampling_rate : float       pixel/voxel size in A/px (from the map header)
+    max_res : float             low-resolution start of the sweep (A)
+    step : float                resolution step (A), clamped to >= 0.25 internally
+    significance : float        confidence for the signal/noise test
 
-    The real MonoRes algorithm sweeps resolution shells from min_res to max_res
-    in `step` increments, testing each frequency at every voxel. We mirror that
-    loop here so the progress bar reports real per-step progress — when the real
-    algorithm drops in, the same progress_callback wiring works unchanged.
+    Returns
+    -------
+    ndarray  local resolution per voxel in A; NaN outside the resolved region.
     """
-    fake_output = (2 + 10 * np.random.rand(*map1.shape)).astype(np.float32)
+    from .monores_core import run_monores
 
-    res_values = np.arange(min_res, max_res + step, step)
-    n_steps = max(len(res_values), 1)
-    for i in range(n_steps):
-        # Real algorithm would test resolution res_values[i] at each voxel here.
-        time.sleep(0.03)   # simulate per-step work — REMOVE when real algo is in
-        if progress_callback is not None:
-            progress_callback((i + 1) / n_steps)
+    if mask is None:
+        raise ValueError("MonoRes requires a mask.")
 
-    if mask is not None:
-        fake_output[mask <= 0] = np.nan
-    return fake_output
+    res_map, _chimera, _refined_mask, _list_res = run_monores(
+        map1, map2, mask,
+        sampling_rate=sampling_rate,
+        max_res=max_res,
+        step=step,
+        significance=significance,
+        progress_callback=progress_callback,
+    )
+
+    # run_monores returns 0 outside the resolved region; convert to NaN so the
+    # histogram / percentile logic in the GUI ignores those voxels.
+    out = np.asarray(res_map, dtype=np.float32)
+    out[out <= 0] = np.nan
+    return out

@@ -158,7 +158,7 @@ class FSCTool(ToolInstance):
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
         self._progress.setTextVisible(True)
-        self._progress.setFormat("Computing FSC…  %p%")
+        self._progress.setFormat("Computing Global FSC…  %p%")
         self._progress.setVisible(False)
         layout.addWidget(self._progress)
 
@@ -203,7 +203,7 @@ class FSCTool(ToolInstance):
     # ==================================================================
 
     def _build_localres_tab(self, layout):
-        hint = QLabel("Provide two maps, or one map + a mask.")
+        hint = QLabel("Two half maps (recommended) or one map. A mask is required.")
         hint.setStyleSheet("color: grey; font-size: 11px;")
         layout.addWidget(hint)
 
@@ -213,12 +213,14 @@ class FSCTool(ToolInstance):
         self._lr_map1_combo = QComboBox()
         self._lr_map2_combo = QComboBox()
         self._lr_mask_combo = QComboBox()
+        self._lr_map1_combo.currentIndexChanged.connect(self._lr_auto_fill_pixel_size)
 
-        self._lr_minres_spin = QDoubleSpinBox()
-        self._lr_minres_spin.setRange(0.0, 100.0)
-        self._lr_minres_spin.setDecimals(2)
-        self._lr_minres_spin.setValue(1.0)
-        self._lr_minres_spin.setSuffix(" Å")
+        self._lr_pix_spin = QDoubleSpinBox()
+        self._lr_pix_spin.setRange(0.001, 100.0)
+        self._lr_pix_spin.setDecimals(4)
+        self._lr_pix_spin.setSingleStep(0.001)
+        self._lr_pix_spin.setValue(1.0)
+        self._lr_pix_spin.setSuffix("  Å/vox")
 
         self._lr_maxres_spin = QDoubleSpinBox()
         self._lr_maxres_spin.setRange(0.1, 200.0)
@@ -240,7 +242,7 @@ class FSCTool(ToolInstance):
         form.addRow("Map 1:", self._lr_map1_combo)
         form.addRow("Map 2 (opt.):", self._lr_map2_combo)
         form.addRow("Mask:", self._lr_mask_combo)
-        form.addRow("Min resolution:", self._lr_minres_spin)
+        form.addRow("Pixel size:", self._lr_pix_spin)
         form.addRow("Max resolution:", self._lr_maxres_spin)
         form.addRow("Step size:", self._lr_step_spin)
         form.addRow("Significance:", self._lr_signif_spin)
@@ -253,7 +255,7 @@ class FSCTool(ToolInstance):
         self._lr_progress = QProgressBar()
         self._lr_progress.setRange(0, 100)
         self._lr_progress.setTextVisible(True)
-        self._lr_progress.setFormat("Computing local resolution…  %p%")
+        self._lr_progress.setFormat("Computing Local Resolution…  %p%")
         self._lr_progress.setVisible(False)
         layout.addWidget(self._lr_progress)
 
@@ -354,12 +356,24 @@ class FSCTool(ToolInstance):
         self._lr_mask_combo.setCurrentIndex(sel)
         self._lr_mask_combo.blockSignals(False)
 
+        self._lr_auto_fill_pixel_size()
+
+    def _lr_auto_fill_pixel_size(self):
+        vol = self._lr_map1_combo.currentData()
+        if vol is not None:
+            try:
+                step = float(vol.data.step[0])
+                if step > 0:
+                    self._lr_pix_spin.setValue(step)
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
     # Local resolution — compute
     # ------------------------------------------------------------------
 
     def _on_lr_compute(self):
-        from .localres_core import fake_monores
+        from .localres_core import monores
 
         map1 = self._lr_map1_combo.currentData()
         map2 = self._lr_map2_combo.currentData()
@@ -368,9 +382,9 @@ class FSCTool(ToolInstance):
         if map1 is None:
             self.session.logger.error("Local Resolution: please select Map 1.")
             return
-        # Need either a second map or a mask (or both)
-        if map2 is None and mask is None:
-            msg = "Provide a second map or a mask."
+        # MonoRes always needs a mask (defines the protein / noise regions)
+        if mask is None:
+            msg = "A mask is required for MonoRes."
             self.session.logger.error(f"Local Resolution: {msg}")
             self._lr_status_label.setText(msg)
             self._lr_status_label.setStyleSheet("color: #c0392b;")
@@ -381,54 +395,77 @@ class FSCTool(ToolInstance):
         self._lr_status_label.setStyleSheet("")
         self._lr_progress.setValue(0)
         self._lr_progress.setVisible(True)
-        QApplication.processEvents()
-        self.session.logger.status("Computing local resolution (fake prototype)…")
+        self.session.logger.status("Computing Local Resolution …")
 
-        try:
-            vol1 = map1.data.matrix().astype(np.float32, copy=True)
-            vol2 = map2.data.matrix().astype(np.float32, copy=True) if map2 is not None else None
-            mask_arr = mask.data.matrix().astype(np.float32, copy=True) if mask is not None else None
+        # Read map data on the main thread, then compute on a worker thread so
+        # ChimeraX stays responsive. UI updates are marshalled back with
+        # session.ui.thread_safe (Qt widgets may only be touched on the GUI thread).
+        vol1 = map1.data.matrix().astype(np.float64, copy=True)
+        vol2 = map2.data.matrix().astype(np.float64, copy=True) if map2 is not None else None
+        mask_arr = mask.data.matrix().astype(np.float64, copy=True)
+        pixel_size = self._lr_pix_spin.value()
+        max_res = self._lr_maxres_spin.value()
+        step = self._lr_step_spin.value()
+        significance = self._lr_signif_spin.value()
 
-            cb = self._make_progress_cb(self._lr_progress, "Computing local resolution…")
-            output = fake_monores(
-                vol1, vol2, mask_arr,
-                min_res=self._lr_minres_spin.value(),
-                max_res=self._lr_maxres_spin.value(),
-                step=self._lr_step_spin.value(),
-                significance=self._lr_signif_spin.value(),
-                progress_callback=cb,
-            )
-            self._lr_output = output
+        import threading, time
 
-            # Auto-set range to actual data range (ignore NaN outside mask)
-            valid = output[np.isfinite(output)]
-            data_min = float(np.percentile(valid, 2))
-            data_max = float(np.percentile(valid, 98))
-            self._lr_res_min_spin.setValue(round(data_min, 2))
-            self._lr_res_max_spin.setValue(round(data_max, 2))
+        def progress(frac):
+            pct = int(max(0.0, min(1.0, frac)) * 100)
+            self.session.ui.thread_safe(self._lr_set_progress, pct)
 
-            self._update_lr_histogram(output, data_min, data_max)
+        def worker():
+            t0 = time.perf_counter()
+            try:
+                output = monores(
+                    vol1, vol2, mask_arr,
+                    sampling_rate=pixel_size,
+                    max_res=max_res, step=step, significance=significance,
+                    progress_callback=progress,
+                )
+                elapsed = time.perf_counter() - t0
+                self.session.ui.thread_safe(self._lr_on_done, output, elapsed)
+            except Exception as e:
+                self.session.ui.thread_safe(self._lr_on_error, str(e))
 
-            self._lr_update_btn.setEnabled(True)
-            self._lr_color_btn.setEnabled(True)
-            self._lr_status_label.setText(
-                f"Done — resolution range {data_min:.1f}–{data_max:.1f} Å "
-                f"(masked voxels)"
-            )
-            self._lr_status_label.setStyleSheet("color: #27ae60;")
-            self.session.logger.info(
-                f"Local resolution output shape: {output.shape}\n"
-                f"  Range (2nd–98th pct): {data_min:.2f} – {data_max:.2f} Å"
-            )
+        threading.Thread(target=worker, daemon=True).start()
 
-        except Exception as e:
-            self.session.logger.error(f"Local resolution failed: {e}")
-            self._lr_status_label.setText(f"Error: {e}")
-            self._lr_status_label.setStyleSheet("color: #c0392b;")
-        finally:
-            self._lr_compute_btn.setEnabled(True)
-            self._lr_progress.setVisible(False)
-            self.session.logger.status("Local resolution done.")
+    def _lr_set_progress(self, pct):
+        self._lr_progress.setValue(pct)
+        self._lr_progress.setFormat("Computing Local Resolution…  %p%")
+
+    def _lr_on_done(self, output, elapsed):
+        self._lr_output = output
+        valid = output[np.isfinite(output)]
+        data_min = float(np.percentile(valid, 2))
+        data_max = float(np.percentile(valid, 98))
+        self._lr_res_min_spin.setValue(round(data_min, 2))
+        self._lr_res_max_spin.setValue(round(data_max, 2))
+
+        self._update_lr_histogram(output, data_min, data_max)
+
+        self._lr_update_btn.setEnabled(True)
+        self._lr_color_btn.setEnabled(True)
+        self._lr_compute_btn.setEnabled(True)
+        self._lr_progress.setVisible(False)
+        self._lr_status_label.setText(
+            f"Done in {elapsed:.1f} s — resolution range "
+            f"{data_min:.1f}–{data_max:.1f} Å"
+        )
+        self._lr_status_label.setStyleSheet("color: #27ae60;")
+        self.session.logger.info(
+            f"Local resolution computed in {elapsed:.1f} s.\n"
+            f"  Output shape: {output.shape}\n"
+            f"  Range (2nd–98th pct): {data_min:.2f} – {data_max:.2f} Å"
+        )
+        self.session.logger.status("Local resolution done.")
+
+    def _lr_on_error(self, msg):
+        self.session.logger.error(f"Local resolution failed: {msg}")
+        self._lr_status_label.setText(f"Error: {msg}")
+        self._lr_status_label.setStyleSheet("color: #c0392b;")
+        self._lr_compute_btn.setEnabled(True)
+        self._lr_progress.setVisible(False)
 
     def _on_lr_update_histogram(self):
         if self._lr_output is None:
@@ -761,7 +798,7 @@ class FSCTool(ToolInstance):
         """Public entry point — also called by the fsc command."""
         from .fsc_core import compute_fsc, find_resolution
 
-        self.session.logger.status("Computing FSC …")
+        self.session.logger.status("Computing Global FSC …")
         self._compute_btn.setEnabled(False)
         self._progress.setValue(0)
         self._progress.setVisible(True)
@@ -793,7 +830,7 @@ class FSCTool(ToolInstance):
                 pass
 
             threshold = self._thresh_spin.value()
-            cb = self._make_progress_cb(self._progress, "Computing FSC…")
+            cb = self._make_progress_cb(self._progress, "Computing Global FSC…")
             fsc_values = compute_fsc(vol1, vol2, mask_arr, progress_callback=cb)
             resolution = find_resolution(fsc_values, pixel_size, threshold=threshold)
 
