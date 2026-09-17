@@ -7,7 +7,7 @@ from Qt.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QFormLayout,
     QComboBox, QPushButton, QDoubleSpinBox, QLabel, QSizePolicy,
     QRadioButton, QButtonGroup, QTabWidget, QWidget, QProgressBar,
-    QApplication,
+    QApplication, QCheckBox,
 )
 from Qt.QtCore import Qt
 
@@ -29,11 +29,16 @@ class FSCTool(ToolInstance):
         self._lr_output = None
         self._lr_vol = None   # the ChimeraX volume created from lr output
 
+        # Directional resolution state
+        self._dr_output = None   # dict: metric key -> per-voxel array
+        self._dr_vol = None
+
         self._build_ui()
         self.tool_window.manage('side')
         self._refresh_volume_list()
         self._refresh_structure_list()
         self._refresh_lr_volume_list()
+        self._refresh_dr_volume_list()
         self._handlers = [
             session.triggers.add_handler('add models', self._on_models_changed),
             session.triggers.add_handler('remove models', self._on_models_changed),
@@ -66,6 +71,14 @@ class FSCTool(ToolInstance):
         lr_widget.setLayout(lr_layout)
         tabs.addTab(lr_widget, "Local Resolution")
 
+        dr_widget = QWidget()
+        dr_layout = QVBoxLayout()
+        dr_layout.setContentsMargins(6, 6, 6, 6)
+        dr_layout.setSpacing(4)
+        self._build_directional_tab(dr_layout)
+        dr_widget.setLayout(dr_layout)
+        tabs.addTab(dr_widget, "Directional Resolution")
+
         root.addWidget(tabs)
         parent.setLayout(root)
 
@@ -77,7 +90,7 @@ class FSCTool(ToolInstance):
         # Mode toggle
         mode_row = QHBoxLayout()
         self._mode_map = QRadioButton("Map vs Map")
-        self._mode_pdb = QRadioButton("Map vs PDB")
+        self._mode_pdb = QRadioButton("Map vs Atomic model")
         self._mode_map.setChecked(True)
         self._mode_group = QButtonGroup()
         self._mode_group.addButton(self._mode_map)
@@ -126,7 +139,7 @@ class FSCTool(ToolInstance):
         self._sim_res_spin.setSuffix("  Å")
 
         self._map2_label = QLabel("Map 2:")
-        self._struct_label = QLabel("Structure:")
+        self._struct_label = QLabel("Atomic model:")
         self._sim_res_label = QLabel("Sim. resolution:")
 
         form.addRow("Map 1:", self._map1_combo)
@@ -477,48 +490,53 @@ class FSCTool(ToolInstance):
         )
 
     def _update_lr_histogram(self, output, res_min, res_max):
+        self._draw_metric_histogram(self._lr_ax_hist, self._lr_ax_cbar,
+                                    self._lr_canvas, output, res_min, res_max,
+                                    "Local resolution (Å)")
+
+    def _draw_metric_histogram(self, ax, cax, canvas, output, vmin, vmax, xlabel):
+        """Shared histogram + matching colorbar used by the Local and
+        Directional tabs. Bars are colored by value with matplotlib 'rainbow'."""
         import matplotlib.cm as mcm
         import matplotlib.colors as mcolors
 
+        if vmax <= vmin:
+            vmax = vmin + 1e-6
+
         flat = output.ravel()
         flat = flat[np.isfinite(flat)]
-        in_range = flat[(flat >= res_min) & (flat <= res_max)]
+        in_range = flat[(flat >= vmin) & (flat <= vmax)]
 
         cmap = mcm.get_cmap('rainbow')
-        norm = mcolors.Normalize(vmin=res_min, vmax=res_max)
+        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
 
-        ax = self._lr_ax_hist
         ax.cla()
-
         if len(in_range) == 0:
             ax.text(0.5, 0.5, "No voxels in selected range",
                     transform=ax.transAxes, ha='center', va='center',
                     fontsize=9, color='grey')
         else:
-            counts, edges = np.histogram(in_range, bins=60,
-                                         range=(res_min, res_max))
+            counts, edges = np.histogram(in_range, bins=60, range=(vmin, vmax))
             centers = (edges[:-1] + edges[1:]) / 2
             bar_colors = [cmap(norm(c)) for c in centers]
             ax.bar(edges[:-1], counts, width=np.diff(edges),
                    color=bar_colors, align='edge', edgecolor='none')
 
         ax.set_ylabel("Voxel count", fontsize=9)
-        ax.set_xlim(res_min, res_max)
+        ax.set_xlim(vmin, vmax)
         ax.set_xticklabels([])  # x labels live on the colorbar below
         ax.grid(True, axis='y', alpha=0.2)
 
         # Colorbar directly beneath, sharing the same x-range → reads as one unit
-        cax = self._lr_ax_cbar
         cax.set_visible(True)
         cax.cla()
-        gradient = np.linspace(res_min, res_max, 256).reshape(1, -1)
-        cax.imshow(gradient, aspect='auto', cmap=cmap,
-                   extent=[res_min, res_max, 0, 1])
+        gradient = np.linspace(vmin, vmax, 256).reshape(1, -1)
+        cax.imshow(gradient, aspect='auto', cmap=cmap, extent=[vmin, vmax, 0, 1])
         cax.set_yticks([])
-        cax.set_xlim(res_min, res_max)
-        cax.set_xlabel("Local resolution (Å)", fontsize=9)
+        cax.set_xlim(vmin, vmax)
+        cax.set_xlabel(xlabel, fontsize=9)
 
-        self._lr_canvas.draw()
+        canvas.draw()
 
     # ------------------------------------------------------------------
     # Local resolution — color map in ChimeraX
@@ -528,54 +546,72 @@ class FSCTool(ToolInstance):
         if self._lr_output is None:
             self.session.logger.error("Run Local Resolution first.")
             return
-
         map1 = self._lr_map1_combo.currentData()
         if map1 is None:
             return
-
         res_min = self._lr_res_min_spin.value()
         res_max = self._lr_res_max_spin.value()
+        result = self._color_map_by_array(
+            map1, self._lr_output, res_min, res_max,
+            values_name="resolution values", copy_name="local resolution",
+            prev_attr="_lr_vol", key_title="Local resolution (Å)")
+        if result is not None:
+            map_copy, vals_vol = result
+            self.session.logger.info(
+                f"Colored map #{map_copy.id_string} ({map1.name}) "
+                f"by local resolution, range {res_min:.1f}–{res_max:.1f} Å.\n"
+                f"Resolution values volume: #{vals_vol.id_string} (hidden)"
+            )
 
+    def _color_map_by_array(self, map1, array, vmin, vmax,
+                            values_name, copy_name, prev_attr, key_title):
+        """Shared by the Local and Directional tabs: build a ChimeraX volume
+        from a per-voxel array, copy `map1`, and color the copy's surface by
+        the array using a palette that matches the matplotlib histogram.
+
+        `prev_attr` names the attribute holding the previously created values
+        volume for this tab so repeated clicks replace rather than stack.
+        Returns (map_copy, values_volume) or None on failure.
+        """
         from chimerax.map_data import ArrayGridData
-        from chimerax.map import volume_from_grid_data
+        from chimerax.map import volume_from_grid_data, Volume
         from chimerax.core.commands import run
-        from chimerax.map import Volume
 
-        # Close previous local res volume if one exists
-        if self._lr_vol is not None:
-            try:
-                run(self.session, f"close #{self._lr_vol.id_string}")
-            except Exception:
-                pass
-            self._lr_vol = None
+        # Replace (not stack) the values volume and colored copy from a previous click
+        for attr in (prev_attr, prev_attr + "_copy"):
+            prev = getattr(self, attr, None)
+            if prev is not None:
+                try:
+                    if not prev.deleted:
+                        run(self.session, f"close #{prev.id_string}")
+                except Exception:
+                    pass
+                setattr(self, attr, None)
 
-        # Create a new ChimeraX volume from the local resolution array.
-        # NaN (outside mask) -> res_max so those voxels don't skew the coloring.
-        arr = np.array(self._lr_output, dtype=np.float32)
-        arr = np.where(np.isfinite(arr), arr, res_max)
-        clipped = np.clip(arr, res_min, res_max).astype(np.float32)
-        grid = ArrayGridData(clipped,
-                             origin=map1.data.origin,
-                             step=map1.data.step,
-                             name='resolution values')
-        localres_vol = volume_from_grid_data(grid, self.session, open_model=True)
-        self._lr_vol = localres_vol
+        # NaN (outside mask) -> vmax so those voxels don't skew the coloring.
+        arr = np.array(array, dtype=np.float32)
+        arr = np.where(np.isfinite(arr), arr, vmax)
+        clipped = np.clip(arr, vmin, vmax).astype(np.float32)
+        grid = ArrayGridData(clipped, origin=map1.data.origin,
+                             step=map1.data.step, name=values_name)
+        vals_vol = volume_from_grid_data(grid, self.session, open_model=True)
+        setattr(self, prev_attr, vals_vol)
 
-        # Make a copy of map1 to color (leaves original untouched)
-        before = set(self.session.models.list(type=Volume))
-        run(self.session, f"volume copy #{map1.id_string}")
-        after = set(self.session.models.list(type=Volume))
-        new = (after - before) - {localres_vol}
-        if not new:
+        # Copy map1 so the original stays untouched. Build the copy ourselves
+        # with its final name: Volume Viewer reads the name only once, when the
+        # model is added, and does not pick up later renames.
+        copy_grid = ArrayGridData(map1.data.matrix().copy(),
+                                  origin=map1.data.origin,
+                                  step=map1.data.step, name=copy_name)
+        map_copy = volume_from_grid_data(copy_grid, self.session, open_model=True)
+        if map_copy is None:
             self.session.logger.error("Could not create a copy of the map.")
-            return
-        map_copy = next(iter(new))
-        map_copy.name = "local resolution"
+            return None
+        map_copy.name = copy_name
+        setattr(self, prev_attr + "_copy", map_copy)
 
-        # The copy needs a visible surface with actual geometry before
-        # 'color sample' can paint it — otherwise ChimeraX reports an
-        # "empty surface model". Pick a contour level: use the original's
-        # surface level if it has one, otherwise derive one from statistics.
+        # The copy needs a surface with real geometry before 'color sample'
+        # can paint it. Use the original's level if it has one, else statistics.
         level = None
         try:
             surfs = map1.surfaces
@@ -586,13 +622,10 @@ class FSCTool(ToolInstance):
         if level is None:
             data = map_copy.data.matrix()
             level = float(np.nanmean(data) + 3.0 * np.nanstd(data))
+        run(self.session, f"volume #{map_copy.id_string} level {level} style surface")
 
-        run(self.session,
-            f"volume #{map_copy.id_string} level {level} style surface")
-
-        # In the GUI, ChimeraX computes big surfaces in a background thread, so
-        # the geometry isn't ready when 'color sample' runs → "empty surface".
-        # Force each surface to compute synchronously before coloring.
+        # ChimeraX computes big surfaces in a background thread; force them to
+        # finish synchronously so the geometry exists when we color it.
         try:
             ro = map_copy.rendering_options
             for s in map_copy.surfaces:
@@ -601,24 +634,385 @@ class FSCTool(ToolInstance):
         except Exception as e:
             self.session.logger.warning(f"Surface pre-compute skipped: {e}")
 
-        # Color the copy's surface by the local resolution values.
-        # Build the palette from matplotlib's 'rainbow' colormap so the map
-        # coloring matches the histogram exactly (ChimeraX's built-in "rainbow"
-        # palette is a different set of colors).
-        palette = self._matplotlib_palette('rainbow', res_min, res_max, n=32)
+        # Palette sampled from matplotlib 'rainbow' so the map matches the histogram
+        palette = self._matplotlib_palette('rainbow', vmin, vmax, n=32)
         run(self.session,
-            f"color sample #{map_copy.id_string} "
-            f"map #{localres_vol.id_string} "
-            f"palette {palette} range {res_min},{res_max}")
+            f"color sample #{map_copy.id_string} map #{vals_vol.id_string} "
+            f"palette {palette} range {vmin},{vmax}")
 
-        # Hide the raw resolution volume so it doesn't obscure the colored map
-        run(self.session, f"hide #{localres_vol.id_string} models")
+        # Hide the raw values volume so it doesn't obscure the colored map
+        run(self.session, f"hide #{vals_vol.id_string} models")
 
-        self.session.logger.info(
-            f"Colored map #{map_copy.id_string} ({map1.name}) "
-            f"by local resolution, range {res_min:.1f}–{res_max:.1f} Å.\n"
-            f"Resolution values volume: #{localres_vol.id_string} (hidden)"
-        )
+        self._show_color_key(vmin, vmax, key_title)
+        return map_copy, vals_vol
+
+    def _show_color_key(self, vmin, vmax, title, n=32, n_labels=5):
+        """Draw the same matplotlib 'rainbow' colorbar in the 3D view (bottom
+        left) so the color scale is visible while rotating the structure."""
+        import matplotlib.cm as mcm
+        import matplotlib.colors as mcolors
+        from chimerax.core.commands import run
+
+        cmap = mcm.get_cmap('rainbow')
+        label_idx = {round(i * (n - 1) / (n_labels - 1)) for i in range(n_labels)}
+        stops = []
+        for i in range(n):
+            frac = i / (n - 1)
+            hex_color = mcolors.to_hex(cmap(frac))
+            label = f"{vmin + frac * (vmax - vmin):.2f}" if i in label_idx else ""
+            stops.append(f"{hex_color}:{label}")
+        run(self.session,
+            "key " + " ".join(stops) +
+            " pos 0.05,0.05 size 0.4,0.04 fontSize 14 colorTreatment blended")
+
+        # Title above the key: create once, then just change its text
+        try:
+            run(self.session, f'2dlabels change fsc_key_title text "{title}"')
+        except Exception:
+            run(self.session, f'2dlabels create fsc_key_title text "{title}" '
+                              f'xpos 0.05 ypos 0.12 size 14')
+
+    # ==================================================================
+    # Tab 3 — Directional Resolution (MonoDir)
+    # ==================================================================
+
+    def _build_directional_tab(self, layout):
+        from .directional_core import METRICS
+
+        hint = QLabel("One map + a mask. MonoRes runs first internally, then MonoDir.")
+        hint.setStyleSheet("color: grey; font-size: 11px;")
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        form.setSpacing(4)
+
+        self._dr_map_combo = QComboBox()
+        self._dr_mask_combo = QComboBox()
+        for combo in (self._dr_map_combo, self._dr_mask_combo):
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(12)
+            combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._dr_map_combo.currentIndexChanged.connect(self._dr_auto_fill_pixel_size)
+
+        self._dr_pix_spin = QDoubleSpinBox()
+        self._dr_pix_spin.setRange(0.001, 100.0)
+        self._dr_pix_spin.setDecimals(4)
+        self._dr_pix_spin.setSingleStep(0.001)
+        self._dr_pix_spin.setValue(1.0)
+        self._dr_pix_spin.setSuffix("  Å/vox")
+
+        self._dr_signif_spin = QDoubleSpinBox()
+        self._dr_signif_spin.setRange(0.5, 0.999)
+        self._dr_signif_spin.setDecimals(3)
+        self._dr_signif_spin.setValue(0.95)
+
+        self._dr_step_spin = QDoubleSpinBox()
+        self._dr_step_spin.setRange(0.05, 10.0)
+        self._dr_step_spin.setDecimals(2)
+        self._dr_step_spin.setValue(0.5)
+        self._dr_step_spin.setSuffix(" Å")
+
+        self._dr_fast_check = QCheckBox("Fast computation (recommended for large volumes)")
+        self._dr_premask_check = QCheckBox("Input map is premasked (spherical mask)")
+        self._dr_premask_check.toggled.connect(self._on_dr_premask_toggled)
+
+        self._dr_radius_label = QLabel("Spherical mask radius:")
+        self._dr_radius_spin = QDoubleSpinBox()
+        self._dr_radius_spin.setRange(-1.0, 100000.0)
+        self._dr_radius_spin.setDecimals(1)
+        self._dr_radius_spin.setValue(-1.0)
+        self._dr_radius_spin.setSuffix(" px")
+        self._dr_radius_spin.setToolTip("-1 = use half the box size")
+
+        form.addRow("Map:", self._dr_map_combo)
+        form.addRow("Mask:", self._dr_mask_combo)
+        form.addRow("Pixel size:", self._dr_pix_spin)
+        form.addRow("Significance:", self._dr_signif_spin)
+        form.addRow("Resolution step:", self._dr_step_spin)
+        form.addRow("", self._dr_fast_check)
+        form.addRow("", self._dr_premask_check)
+        form.addRow(self._dr_radius_label, self._dr_radius_spin)
+        layout.addLayout(form)
+
+        self._dr_compute_btn = QPushButton("Compute Directional Resolution")
+        self._dr_compute_btn.clicked.connect(self._on_dr_compute)
+        layout.addWidget(self._dr_compute_btn)
+
+        self._dr_progress = QProgressBar()
+        self._dr_progress.setRange(0, 100)
+        self._dr_progress.setTextVisible(True)
+        self._dr_progress.setFormat("Computing Directional Resolution…  %p%")
+        self._dr_progress.setVisible(False)
+        layout.addWidget(self._dr_progress)
+
+        self._dr_status_label = QLabel("")
+        self._dr_status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._dr_status_label)
+
+        # Metric selector — which per-voxel output to histogram / color by
+        metric_row = QHBoxLayout()
+        metric_row.addWidget(QLabel("Metric:"))
+        self._dr_metric_combo = QComboBox()
+        for key, (label, _units, _rng) in METRICS.items():
+            self._dr_metric_combo.addItem(label, userData=key)
+        self._dr_metric_combo.currentIndexChanged.connect(self._on_dr_metric_changed)
+        metric_row.addWidget(self._dr_metric_combo, 1)
+        layout.addLayout(metric_row)
+
+        range_row = QHBoxLayout()
+        range_row.addWidget(QLabel("Display range:"))
+        self._dr_min_spin = QDoubleSpinBox()
+        self._dr_min_spin.setRange(0.0, 1000.0)
+        self._dr_min_spin.setDecimals(2)
+        self._dr_max_spin = QDoubleSpinBox()
+        self._dr_max_spin.setRange(0.0, 1000.0)
+        self._dr_max_spin.setDecimals(2)
+        self._dr_max_spin.setValue(1.0)
+        range_row.addWidget(self._dr_min_spin)
+        range_row.addWidget(QLabel("to"))
+        range_row.addWidget(self._dr_max_spin)
+        range_row.addStretch()
+        layout.addLayout(range_row)
+
+        self._dr_update_btn = QPushButton("Update Histogram")
+        self._dr_update_btn.clicked.connect(self._on_dr_update_histogram)
+        self._dr_update_btn.setEnabled(False)
+        layout.addWidget(self._dr_update_btn)
+
+        layout.addWidget(self._make_dr_canvas())
+
+        self._dr_color_btn = QPushButton("Color Map in ChimeraX")
+        self._dr_color_btn.clicked.connect(self._on_dr_color_map)
+        self._dr_color_btn.setEnabled(False)
+        layout.addWidget(self._dr_color_btn)
+
+        self._on_dr_premask_toggled(False)
+
+    def _on_dr_premask_toggled(self, checked):
+        self._dr_radius_label.setVisible(bool(checked))
+        self._dr_radius_spin.setVisible(bool(checked))
+
+    def _make_dr_canvas(self):
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        from matplotlib.gridspec import GridSpec
+
+        self._dr_fig = Figure(figsize=(5, 3.5), constrained_layout=True)
+        gs = GridSpec(2, 1, figure=self._dr_fig, height_ratios=[12, 1], hspace=0.05)
+        self._dr_ax_hist = self._dr_fig.add_subplot(gs[0])
+        self._dr_ax_cbar = self._dr_fig.add_subplot(gs[1])
+
+        self._dr_canvas = FigureCanvas(self._dr_fig)
+        self._dr_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._draw_empty_dr_axes()
+        return self._dr_canvas
+
+    def _draw_empty_dr_axes(self):
+        self._dr_ax_hist.cla()
+        self._dr_ax_hist.set_xlabel("Metric value", fontsize=9)
+        self._dr_ax_hist.set_ylabel("Voxel count", fontsize=9)
+        self._dr_ax_hist.text(0.5, 0.5, "No data yet",
+                              transform=self._dr_ax_hist.transAxes,
+                              ha='center', va='center', fontsize=10, color='grey')
+        self._dr_ax_hist.grid(True, alpha=0.25)
+        self._dr_ax_cbar.set_visible(False)
+        self._dr_canvas.draw()
+
+    def _refresh_dr_volume_list(self):
+        from chimerax.map import Volume
+        vols = self.session.models.list(type=Volume)
+
+        prev = self._dr_map_combo.currentData()
+        self._dr_map_combo.blockSignals(True)
+        self._dr_map_combo.clear()
+        sel = 0
+        for idx, v in enumerate(vols):
+            self._dr_map_combo.addItem(f"#{v.id_string}  {v.name}", userData=v)
+            if v is prev:
+                sel = idx
+        self._dr_map_combo.setCurrentIndex(sel)
+        self._dr_map_combo.blockSignals(False)
+
+        prev_mask = self._dr_mask_combo.currentData()
+        self._dr_mask_combo.blockSignals(True)
+        self._dr_mask_combo.clear()
+        self._dr_mask_combo.addItem("None", userData=None)
+        sel = 0
+        for idx, v in enumerate(vols):
+            self._dr_mask_combo.addItem(f"#{v.id_string}  {v.name}", userData=v)
+            if v is prev_mask:
+                sel = idx + 1
+        self._dr_mask_combo.setCurrentIndex(sel)
+        self._dr_mask_combo.blockSignals(False)
+
+        self._dr_auto_fill_pixel_size()
+
+    def _dr_auto_fill_pixel_size(self):
+        vol = self._dr_map_combo.currentData()
+        if vol is not None:
+            try:
+                step = float(vol.data.step[0])
+                if step > 0:
+                    self._dr_pix_spin.setValue(step)
+            except Exception:
+                pass
+
+    # ---- compute ------------------------------------------------------
+
+    def _on_dr_compute(self):
+        from .directional_core import fake_monodir
+
+        map1 = self._dr_map_combo.currentData()
+        mask = self._dr_mask_combo.currentData()
+        if map1 is None:
+            self.session.logger.error("Directional Resolution: please select a map.")
+            return
+        if mask is None:
+            msg = "A mask is required for MonoDir."
+            self.session.logger.error(f"Directional Resolution: {msg}")
+            self._dr_status_label.setText(msg)
+            self._dr_status_label.setStyleSheet("color: #c0392b;")
+            return
+
+        self._dr_compute_btn.setEnabled(False)
+        self._dr_status_label.setText("Computing…")
+        self._dr_status_label.setStyleSheet("")
+        self._dr_progress.setValue(0)
+        self._dr_progress.setVisible(True)
+        self.session.logger.status("Computing Directional Resolution …")
+
+        vol = map1.data.matrix().astype(np.float64, copy=True)
+        mask_arr = mask.data.matrix().astype(np.float64, copy=True)
+        pixel_size = self._dr_pix_spin.value()
+        significance = self._dr_signif_spin.value()
+        res_step = self._dr_step_spin.value()
+        fast = self._dr_fast_check.isChecked()
+        premasked = self._dr_premask_check.isChecked()
+        volume_radius = self._dr_radius_spin.value()
+
+        import threading, time
+
+        def progress(frac):
+            pct = int(max(0.0, min(1.0, frac)) * 100)
+            self.session.ui.thread_safe(self._dr_set_progress, pct)
+
+        def worker():
+            t0 = time.perf_counter()
+            try:
+                out = fake_monodir(
+                    vol, mask_arr, sampling_rate=pixel_size,
+                    significance=significance, res_step=res_step, fast=fast,
+                    premasked=premasked, volume_radius=volume_radius,
+                    progress_callback=progress,
+                )
+                elapsed = time.perf_counter() - t0
+                self.session.ui.thread_safe(self._dr_on_done, out, elapsed)
+            except Exception as e:
+                self.session.ui.thread_safe(self._dr_on_error, str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _dr_set_progress(self, pct):
+        self._dr_progress.setValue(pct)
+        self._dr_progress.setFormat("Computing Directional Resolution…  %p%")
+
+    def _dr_on_done(self, out, elapsed):
+        self._dr_output = out
+        self._dr_apply_metric_range()
+        self._dr_update_btn.setEnabled(True)
+        self._dr_color_btn.setEnabled(True)
+        self._dr_compute_btn.setEnabled(True)
+        self._dr_progress.setVisible(False)
+        self._dr_status_label.setText(f"Done in {elapsed:.1f} s")
+        self._dr_status_label.setStyleSheet("color: #27ae60;")
+        from .directional_core import METRICS
+        lines = [f"Directional resolution computed in {elapsed:.1f} s."]
+        for key, arr in out.items():
+            v = arr[np.isfinite(arr)]
+            if v.size:
+                lines.append(f"  {METRICS[key][0]:<32} "
+                             f"{float(np.percentile(v, 2)):.2f} – "
+                             f"{float(np.percentile(v, 98)):.2f}")
+        self.session.logger.info("\n".join(lines))
+        self.session.logger.status("Directional resolution done.")
+
+    def _dr_on_error(self, msg):
+        self.session.logger.error(f"Directional resolution failed: {msg}")
+        self._dr_status_label.setText(f"Error: {msg}")
+        self._dr_status_label.setStyleSheet("color: #c0392b;")
+        self._dr_compute_btn.setEnabled(True)
+        self._dr_progress.setVisible(False)
+
+    # ---- metric / histogram / color ----------------------------------
+
+    def _dr_current_key(self):
+        return self._dr_metric_combo.currentData()
+
+    def _dr_current_array(self):
+        if self._dr_output is None:
+            return None
+        return self._dr_output.get(self._dr_current_key())
+
+    def _dr_apply_metric_range(self):
+        """Set the display range to suit the selected metric, then redraw."""
+        from .directional_core import METRICS
+        arr = self._dr_current_array()
+        if arr is None:
+            return
+        fixed = METRICS[self._dr_current_key()][2]
+        if fixed is not None:
+            vmin, vmax = fixed
+        else:
+            v = arr[np.isfinite(arr)]
+            vmin = float(np.percentile(v, 2)) if v.size else 0.0
+            vmax = float(np.percentile(v, 98)) if v.size else 1.0
+        for spin, val in ((self._dr_min_spin, vmin), (self._dr_max_spin, vmax)):
+            spin.blockSignals(True)
+            spin.setValue(round(val, 2))
+            spin.blockSignals(False)
+        self._dr_draw_histogram(vmin, vmax)
+
+    def _dr_draw_histogram(self, vmin, vmax):
+        from .directional_core import METRICS
+        arr = self._dr_current_array()
+        if arr is None:
+            return
+        xlabel = METRICS[self._dr_current_key()][1]
+        self._draw_metric_histogram(self._dr_ax_hist, self._dr_ax_cbar,
+                                    self._dr_canvas, arr, vmin, vmax, xlabel)
+
+    def _on_dr_metric_changed(self, *args):
+        if self._dr_output is not None:
+            self._dr_apply_metric_range()
+
+    def _on_dr_update_histogram(self):
+        self._dr_draw_histogram(self._dr_min_spin.value(), self._dr_max_spin.value())
+
+    def _on_dr_color_map(self):
+        from .directional_core import METRICS
+        arr = self._dr_current_array()
+        if arr is None:
+            self.session.logger.error("Run Directional Resolution first.")
+            return
+        map1 = self._dr_map_combo.currentData()
+        if map1 is None:
+            return
+        key = self._dr_current_key()
+        label, units, _ = METRICS[key]
+        vmin = self._dr_min_spin.value()
+        vmax = self._dr_max_spin.value()
+        result = self._color_map_by_array(
+            map1, arr, vmin, vmax,
+            values_name=f"{label} values", copy_name=f"directional: {label}",
+            prev_attr="_dr_vol",
+            key_title=label if key == "doa" else f"{label} (Å)")
+        if result is not None:
+            map_copy, vals_vol = result
+            self.session.logger.info(
+                f"Colored map #{map_copy.id_string} ({map1.name}) by {label}, "
+                f"range {vmin:.2f}–{vmax:.2f} ({units}).\n"
+                f"Values volume: #{vals_vol.id_string} (hidden)"
+            )
 
     def _make_progress_cb(self, progressbar, prefix):
         """Return a callback(fraction 0..1) that drives a QProgressBar and
@@ -714,6 +1108,7 @@ class FSCTool(ToolInstance):
         self._refresh_volume_list()
         self._refresh_structure_list()
         self._refresh_lr_volume_list()
+        self._refresh_dr_volume_list()
 
     # ==================================================================
     # Tab 1 — FSC compute
@@ -741,7 +1136,7 @@ class FSCTool(ToolInstance):
         else:
             structure = self._struct_combo.currentData()
             if structure is None:
-                self.session.logger.error("Please open a PDB structure first.")
+                self.session.logger.error("Please open an atomic model first.")
                 return
             self._compute_pdb_mode(map1, structure, pixel_size, mask,
                                    self._sim_res_spin.value())
