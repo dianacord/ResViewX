@@ -32,6 +32,12 @@ class FSCTool(ToolInstance):
         # Directional resolution state
         self._dr_output = None   # dict: metric key -> per-voxel array
         self._dr_vol = None
+        self._dr_fso = None      # FSO curve data
+        self._dr_dr = None       # (zenith, azimuth) resolution grid
+        self._dr_view_handler = None
+        self._dr_view_vol = None
+        self._dr_saved_colors = []
+        self._dr_last_dir = None
 
         self._build_ui()
         self.tool_window.manage('side')
@@ -712,6 +718,20 @@ class FSCTool(ToolInstance):
         self._dr_step_spin.setValue(0.5)
         self._dr_step_spin.setSuffix(" Å")
 
+        self._dr_cone_spin = QDoubleSpinBox()
+        self._dr_cone_spin.setRange(1.0, 90.0)
+        self._dr_cone_spin.setDecimals(1)
+        self._dr_cone_spin.setValue(17.0)
+        self._dr_cone_spin.setSuffix(" °")
+        self._dr_cone_spin.setToolTip("Half-angle of the Fourier cone used per direction")
+
+        self._dr_thresh_spin = QDoubleSpinBox()
+        self._dr_thresh_spin.setRange(0.001, 1.0)
+        self._dr_thresh_spin.setDecimals(3)
+        self._dr_thresh_spin.setSingleStep(0.001)
+        self._dr_thresh_spin.setValue(0.143)
+        self._dr_thresh_spin.setToolTip("FSC threshold a direction must exceed to count as occupied")
+
         self._dr_fast_check = QCheckBox("Fast computation (recommended for large volumes)")
         self._dr_premask_check = QCheckBox("Input map is premasked (spherical mask)")
         self._dr_premask_check.toggled.connect(self._on_dr_premask_toggled)
@@ -729,6 +749,8 @@ class FSCTool(ToolInstance):
         form.addRow("Pixel size:", self._dr_pix_spin)
         form.addRow("Significance:", self._dr_signif_spin)
         form.addRow("Resolution step:", self._dr_step_spin)
+        form.addRow("Cone angle:", self._dr_cone_spin)
+        form.addRow("FSC threshold:", self._dr_thresh_spin)
         form.addRow("", self._dr_fast_check)
         form.addRow("", self._dr_premask_check)
         form.addRow(self._dr_radius_label, self._dr_radius_spin)
@@ -749,7 +771,28 @@ class FSCTool(ToolInstance):
         self._dr_status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._dr_status_label)
 
-        # Metric selector — which per-voxel output to histogram / color by
+        # --- 2D plots, one per sub-tab -----------------------------------
+        plot_tabs = QTabWidget()
+
+        fso_page = QWidget()
+        fso_layout = QVBoxLayout()
+        fso_layout.setContentsMargins(0, 0, 0, 0)
+        fso_layout.addWidget(self._make_fso_canvas())
+        fso_page.setLayout(fso_layout)
+        plot_tabs.addTab(fso_page, "FSO curve")
+
+        polar_page = QWidget()
+        polar_layout = QVBoxLayout()
+        polar_layout.setContentsMargins(0, 0, 0, 0)
+        polar_layout.addWidget(self._make_polar_canvas())
+        polar_page.setLayout(polar_layout)
+        plot_tabs.addTab(polar_page, "DR polar")
+
+        hist_page = QWidget()
+        hist_layout = QVBoxLayout()
+        hist_layout.setContentsMargins(0, 0, 0, 0)
+        hist_layout.setSpacing(4)
+
         metric_row = QHBoxLayout()
         metric_row.addWidget(QLabel("Metric:"))
         self._dr_metric_combo = QComboBox()
@@ -757,7 +800,7 @@ class FSCTool(ToolInstance):
             self._dr_metric_combo.addItem(label, userData=key)
         self._dr_metric_combo.currentIndexChanged.connect(self._on_dr_metric_changed)
         metric_row.addWidget(self._dr_metric_combo, 1)
-        layout.addLayout(metric_row)
+        hist_layout.addLayout(metric_row)
 
         range_row = QHBoxLayout()
         range_row.addWidget(QLabel("Display range:"))
@@ -772,19 +815,36 @@ class FSCTool(ToolInstance):
         range_row.addWidget(QLabel("to"))
         range_row.addWidget(self._dr_max_spin)
         range_row.addStretch()
-        layout.addLayout(range_row)
+        hist_layout.addLayout(range_row)
 
         self._dr_update_btn = QPushButton("Update Histogram")
         self._dr_update_btn.clicked.connect(self._on_dr_update_histogram)
         self._dr_update_btn.setEnabled(False)
-        layout.addWidget(self._dr_update_btn)
+        hist_layout.addWidget(self._dr_update_btn)
+        hist_layout.addWidget(self._make_dr_canvas())
+        hist_page.setLayout(hist_layout)
+        plot_tabs.addTab(hist_page, "Metric histogram")
 
-        layout.addWidget(self._make_dr_canvas())
+        layout.addWidget(plot_tabs)
 
-        self._dr_color_btn = QPushButton("Color Map in ChimeraX")
+        # --- 3D coloring --------------------------------------------------
+        self._dr_color_btn = QPushButton("Color Map by Selected Metric")
         self._dr_color_btn.clicked.connect(self._on_dr_color_map)
         self._dr_color_btn.setEnabled(False)
         layout.addWidget(self._dr_color_btn)
+
+        self._dr_view_check = QCheckBox(
+            "Color map by viewing direction (updates as you rotate)")
+        self._dr_view_check.setToolTip(
+            "Paints the whole map one colour: the directional resolution along "
+            "the current viewing direction, using the DR polar colour scale.")
+        self._dr_view_check.setEnabled(False)
+        self._dr_view_check.toggled.connect(self._on_dr_view_color_toggled)
+        layout.addWidget(self._dr_view_check)
+
+        self._dr_view_label = QLabel("")
+        self._dr_view_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._dr_view_label)
 
         self._on_dr_premask_toggled(False)
 
@@ -806,6 +866,203 @@ class FSCTool(ToolInstance):
         self._dr_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._draw_empty_dr_axes()
         return self._dr_canvas
+
+    def _make_fso_canvas(self):
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        self._fso_fig = Figure(figsize=(5, 3.5), constrained_layout=True)
+        self._fso_ax = self._fso_fig.add_subplot(111)
+        self._fso_canvas = FigureCanvas(self._fso_fig)
+        self._fso_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._draw_empty_fso_axes()
+        return self._fso_canvas
+
+    def _draw_empty_fso_axes(self):
+        ax = self._fso_ax
+        ax.cla()
+        ax.set_xlabel("Resolution (Å)", fontsize=9)
+        ax.set_ylabel("FSO (a.u.)", fontsize=9)
+        ax.set_ylim(-0.1, 1.1)
+        ax.text(0.5, 0.5, "No data yet", transform=ax.transAxes,
+                ha='center', va='center', fontsize=10, color='grey')
+        ax.grid(True, alpha=0.25)
+        self._fso_canvas.draw()
+
+    def _dr_draw_fso(self):
+        """FSO curve (green) with the Bingham p-value (red dashed) and the
+        anisotropy band shaded green between the FSO=0.9 and FSO=0.1 crossings.
+        X axis is spatial frequency, labelled in Å."""
+        from matplotlib.ticker import FuncFormatter
+        data = getattr(self, "_dr_fso", None)
+        if not data:
+            return
+        freq, fso, bingham = data["freq"], data["fso"], data["bingham"]
+        cr = data["crossings"]
+
+        ax = self._fso_ax
+        ax.cla()
+        ax.plot(freq, fso, 'g', linewidth=1.5, label='FSO')
+        ax.plot(freq, bingham, 'r--', linewidth=1, label='Bingham p-value')
+        ax.hlines([0.1, 0.5, 0.9], freq[0], freq[-1],
+                  colors='k', linestyles='dashed', linewidth=0.8)
+
+        # Anisotropy band: the wider this is, the more anisotropic the map
+        r09, r01 = cr.get(0.9), cr.get(0.1)
+        if r09 and r01:
+            ax.axvspan(1.0 / r09, 1.0 / r01, alpha=0.3, color='green')
+
+        lines = [f"{thr} → {cr[thr]:.2f} Å" for thr in (0.9, 0.5, 0.1)
+                 if cr.get(thr)]
+        if r09 and r01:
+            lines.append(f"band {r09:.2f}–{r01:.2f} Å")
+        if lines:
+            ax.text(0.02, 0.02, "\n".join(lines), transform=ax.transAxes,
+                    fontsize=9, ha='left', va='bottom',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
+
+        ax.xaxis.set_major_formatter(
+            FuncFormatter(lambda v, p: f"{1.0 / v:.1f}" if v else ""))
+        ax.set_xlim(freq[0], freq[-1])
+        ax.set_ylim(-0.1, 1.1)
+        ax.set_xlabel("Resolution (Å)", fontsize=9)
+        ax.set_ylabel("FSO (a.u.)", fontsize=9)
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc='upper right', fontsize=8)
+        self._fso_canvas.draw()
+
+    def _make_polar_canvas(self):
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        self._polar_fig = Figure(figsize=(5, 4), constrained_layout=True)
+        self._polar_ax = self._polar_fig.add_subplot(111, projection='polar')
+        self._polar_cbar = None
+        self._polar_canvas = FigureCanvas(self._polar_fig)
+        self._polar_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._draw_empty_polar_axes()
+        return self._polar_canvas
+
+    def _draw_empty_polar_axes(self):
+        ax = self._polar_ax
+        ax.cla()
+        ax.set_title("No data yet", fontsize=10, color='grey')
+        self._polar_canvas.draw()
+
+    def _dr_draw_polar(self):
+        """Directional resolution as a function of direction: azimuth around
+        the circle, zenith angle as the radius, colour = resolution in Å."""
+        grid = getattr(self, "_dr_dr", None)
+        if grid is None:
+            return
+        n_zen, n_azi = grid.shape
+        zeniths = np.linspace(0, 90, n_zen)
+        azimuths = np.radians(np.linspace(0, 360, n_azi, endpoint=False))
+        theta, r = np.meshgrid(azimuths, zeniths)
+
+        vmin = float(np.nanmin(grid))
+        vmax = float(np.nanmax(grid))
+        if vmax <= vmin:
+            vmax = vmin + 1e-3
+
+        ax = self._polar_ax
+        ax.cla()
+        if self._polar_cbar is not None:
+            try:
+                self._polar_cbar.remove()
+            except Exception:
+                pass
+            self._polar_cbar = None
+
+        levels = np.linspace(vmin, vmax, 25)
+        pc = ax.contourf(theta, r, grid, levels=levels,
+                         cmap='rainbow', extend='max')
+        ax.set_theta_zero_location('E')
+        ax.set_rlabel_position(135)
+        ax.set_title("Directional resolution (Å)", fontsize=10)
+        self._polar_cbar = self._polar_fig.colorbar(pc, ax=ax, pad=0.1)
+        self._polar_cbar.set_label("Resolution (Å)", fontsize=9)
+        self._polar_canvas.draw()
+
+    # ---- 3D: colour the whole map by the current viewing direction ----
+
+    def _on_dr_view_color_toggled(self, checked):
+        if checked:
+            if getattr(self, "_dr_dr", None) is None:
+                self._dr_view_check.setChecked(False)
+                self.session.logger.error(
+                    "Run Directional Resolution first.")
+                return
+            vol = self._dr_map_combo.currentData()
+            if vol is None:
+                self._dr_view_check.setChecked(False)
+                return
+            self._dr_view_vol = vol
+            # Remember the surface colours so we can put them back
+            self._dr_saved_colors = []
+            try:
+                for s in vol.surfaces:
+                    self._dr_saved_colors.append((s, s.color, s.vertex_colors))
+            except Exception:
+                pass
+            self._dr_last_dir = None
+            self._dr_view_handler = self.session.triggers.add_handler(
+                'new frame', self._dr_view_frame_cb)
+            grid = self._dr_dr
+            self._show_color_key(float(np.nanmin(grid)), float(np.nanmax(grid)),
+                                 "Directional resolution (Å)")
+            self._dr_view_frame_cb(None, None)   # paint immediately
+        else:
+            h = getattr(self, "_dr_view_handler", None)
+            if h is not None:
+                self.session.triggers.remove_handler(h)
+                self._dr_view_handler = None
+            for s, color, vcolors in getattr(self, "_dr_saved_colors", []):
+                try:
+                    if not s.deleted:
+                        s.color = color
+                        s.vertex_colors = vcolors
+                except Exception:
+                    pass
+            self._dr_saved_colors = []
+            self._dr_view_label.setText("")
+
+    def _dr_view_frame_cb(self, trigger_name, data):
+        """Each frame: if the camera moved, recolour the map with the colour of
+        the directional resolution along the new viewing direction."""
+        import matplotlib.cm as mcm
+        import matplotlib.colors as mcolors
+        from .directional_core import direction_resolution
+
+        vol = getattr(self, "_dr_view_vol", None)
+        grid = getattr(self, "_dr_dr", None)
+        if vol is None or grid is None or vol.deleted:
+            return
+        try:
+            view_dir = self.session.main_view.camera.view_direction()
+            d = vol.scene_position.inverse().transform_vector(view_dir)
+        except Exception:
+            return
+
+        d = np.asarray(d, dtype=float)
+        last = getattr(self, "_dr_last_dir", None)
+        if last is not None and float(np.abs(d - last).max()) < 1e-4:
+            return                      # camera hasn't really moved
+        self._dr_last_dir = d
+
+        res = direction_resolution(grid, d)
+        if res is None:
+            return
+        vmin = float(np.nanmin(grid))
+        vmax = float(np.nanmax(grid))
+        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+        rgba = mcm.get_cmap('rainbow')(norm(res))
+        color255 = [int(round(255 * c)) for c in rgba]
+        try:
+            for s in vol.surfaces:
+                s.vertex_colors = None   # uniform colour, not per-vertex
+                s.color = color255
+        except Exception:
+            return
+        self._dr_view_label.setText(f"Viewing direction: {res:.2f} Å")
 
     def _draw_empty_dr_axes(self):
         self._dr_ax_hist.cla()
@@ -860,7 +1117,7 @@ class FSCTool(ToolInstance):
     # ---- compute ------------------------------------------------------
 
     def _on_dr_compute(self):
-        from .directional_core import fake_monodir
+        from .directional_core import fake_monodir, fake_fso, fake_dr
 
         map1 = self._dr_map_combo.currentData()
         mask = self._dr_mask_combo.currentData()
@@ -905,8 +1162,10 @@ class FSCTool(ToolInstance):
                     premasked=premasked, volume_radius=volume_radius,
                     progress_callback=progress,
                 )
+                fso = fake_fso(sampling_rate=pixel_size)
+                dr = fake_dr()
                 elapsed = time.perf_counter() - t0
-                self.session.ui.thread_safe(self._dr_on_done, out, elapsed)
+                self.session.ui.thread_safe(self._dr_on_done, out, fso, dr, elapsed)
             except Exception as e:
                 self.session.ui.thread_safe(self._dr_on_error, str(e))
 
@@ -916,11 +1175,16 @@ class FSCTool(ToolInstance):
         self._dr_progress.setValue(pct)
         self._dr_progress.setFormat("Computing Directional Resolution…  %p%")
 
-    def _dr_on_done(self, out, elapsed):
+    def _dr_on_done(self, out, fso, dr, elapsed):
         self._dr_output = out
+        self._dr_fso = fso
+        self._dr_dr = dr
         self._dr_apply_metric_range()
+        self._dr_draw_fso()
+        self._dr_draw_polar()
         self._dr_update_btn.setEnabled(True)
         self._dr_color_btn.setEnabled(True)
+        self._dr_view_check.setEnabled(True)
         self._dr_compute_btn.setEnabled(True)
         self._dr_progress.setVisible(False)
         self._dr_status_label.setText(f"Done in {elapsed:.1f} s")
@@ -1362,6 +1626,11 @@ class FSCTool(ToolInstance):
     # ==================================================================
 
     def delete(self):
+        if getattr(self, "_dr_view_handler", None) is not None:
+            try:
+                self._dr_view_check.setChecked(False)   # restores map colours
+            except Exception:
+                pass
         for h in self._handlers:
             self.session.triggers.remove_handler(h)
         super().delete()
