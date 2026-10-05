@@ -723,8 +723,14 @@ class FSCTool(ToolInstance):
         form.addRow("Half map 2:", self._dr_half2_combo)
         form.addRow("Mask:", self._dr_mask_combo)
         form.addRow("Pixel size:", self._dr_pix_spin)
+        self._dr_fast_check = QCheckBox("Fast (81 directions instead of 321)")
+        self._dr_fast_check.setToolTip(
+            "Xmipp samples 321 directions by default. The 81-direction set is "
+            "about 4x faster but samples the sphere more coarsely.")
+
         form.addRow("Cone angle:", self._dr_cone_spin)
         form.addRow("FSC threshold:", self._dr_thresh_spin)
+        form.addRow("", self._dr_fast_check)
         layout.addLayout(form)
 
         self._dr_compute_btn = QPushButton("Compute Directional Resolution")
@@ -1014,7 +1020,7 @@ class FSCTool(ToolInstance):
     # ---- compute ------------------------------------------------------
 
     def _on_dr_compute(self):
-        from .directional_core import fake_fso, fake_dr
+        from .directional_core import compute_directional
 
         half1 = self._dr_half1_combo.currentData()
         half2 = self._dr_half2_combo.currentData()
@@ -1048,9 +1054,13 @@ class FSCTool(ToolInstance):
         self._dr_progress.setVisible(True)
         self.session.logger.status("Computing Directional Resolution \u2026")
 
+        v1 = v1.astype(np.float64, copy=True)
+        v2 = v2.astype(np.float64, copy=True)
+        mask_arr = mask.data.matrix().astype(np.float64, copy=True)
         pixel_size = self._dr_pix_spin.value()
         cone_angle = self._dr_cone_spin.value()
         threshold = self._dr_thresh_spin.value()
+        fast = self._dr_fast_check.isChecked()
 
         import threading, time
 
@@ -1061,20 +1071,19 @@ class FSCTool(ToolInstance):
         def worker():
             t0 = time.perf_counter()
             try:
-                # Placeholder until xmipp_resolution_fso is ported. The real
-                # call will take v1, v2, mask, cone_angle and threshold.
-                n = 20
-                for i in range(n):
-                    time.sleep(0.02)
-                    progress((i + 1) / n)
-                fso = fake_fso(sampling_rate=pixel_size)
-                dr = fake_dr()
+                out = compute_directional(
+                    v1, v2, mask_arr,
+                    sampling_rate=pixel_size, cone_angle=cone_angle,
+                    threshold=threshold, fast=fast,
+                    progress_callback=progress)
                 elapsed = time.perf_counter() - t0
-                self.session.ui.thread_safe(self._dr_on_done, fso, dr, elapsed)
+                self.session.ui.thread_safe(
+                    self._dr_on_done, out, out["dr_grid"], elapsed)
             except Exception as e:
                 self.session.ui.thread_safe(self._dr_on_error, str(e))
 
         threading.Thread(target=worker, daemon=True).start()
+
     def _dr_set_progress(self, pct):
         self._dr_progress.setValue(pct)
         self._dr_progress.setFormat("Computing Directional Resolution…  %p%")
@@ -1100,6 +1109,14 @@ class FSCTool(ToolInstance):
                          f"(width {cr[0.9] - cr[0.1]:.2f} \u00c5)")
         lines.append(f"  Directional resolution range: "
                      f"{float(np.nanmin(dr)):.2f} \u2013 {float(np.nanmax(dr)):.2f} \u00c5")
+        gfsc = fso.get("global_fsc")
+        res = fso.get("res")
+        if gfsc is not None and res is not None:
+            below = np.nonzero(np.asarray(gfsc) <= self._dr_thresh_spin.value())[0]
+            if below.size:
+                lines.append(f"  Global FSC @ {self._dr_thresh_spin.value():.3f}: "
+                             f"{float(res[below[0]]):.2f} \u00c5")
+        lines.append(f"  Directions: {len(fso.get('directions', []))}")
         self.session.logger.info("\n".join(lines))
         self.session.logger.status("Directional resolution done.")
     def _dr_on_error(self, msg):

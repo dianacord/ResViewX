@@ -16,12 +16,12 @@ A ChimeraX plugin for cryo-EM map validation: **global Fourier Shell Correlation
 - Interactive histogram with a matching color scale.
 - Colors a copy of the map surface by local resolution using a matplotlib `rainbow` palette, with a matching color key in the 3D view.
 
-### Directional Resolution tab (in progress)
-Based on Xmipp's **FSO** (Fourier Shell Occupancy, `xmipp_resolution_fso`). Takes two half maps + a mask, a cone angle and an FSC threshold.
+### Directional Resolution tab
+Xmipp's **FSO** (Fourier Shell Occupancy, `xmipp_resolution_fso`) ported to pure NumPy. Takes two half maps + a mask, a cone angle and an FSC threshold. Samples 321 directions by default (81 in fast mode).
 - **FSO curve**: fraction of directions per resolution shell still above the FSC threshold (green), with the Bingham test p-value (red dashed) and the anisotropy band shaded between the FSO = 0.9 and 0.1 crossings. The wider the band, the more anisotropic the map.
 - **DR polar plot**: resolution as a function of direction — azimuth around the circle, zenith angle as the radius.
 - **Color by viewing direction**: paints the map a single colour, the directional resolution along the current viewing direction, updating as the map is rotated.
-- The computation itself is a placeholder until `xmipp_resolution_fso` is ported.
+- About 19 s for a 400³ box at 321 directions (9 s in fast mode); rotation is a table lookup, so it stays smooth.
 
 ## Requirements
 - ChimeraX 1.11
@@ -43,6 +43,8 @@ src/
 ├── fsc_core.py          # Pure-numpy FSC math
 ├── localres_core.py     # Local resolution (MonoRes wrapper)
 ├── monores_core.py      # MonoRes, pure NumPy
-├── directional_core.py  # Directional resolution / FSO (placeholder)
+├── directional_core.py  # Directional resolution helpers + FSO entry point
+├── fso_core.py          # FSO (Fourier Shell Occupancy), pure NumPy
+├── fso_directions.py    # Direction tables transcribed from Xmipp
 └── tool.py           # Qt GUI panel (both tabs)
 ```

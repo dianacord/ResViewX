@@ -10,3 +10,7 @@ __pycache__/
 
 # Claude Code local session data
 .claude/
+
+# Reference copies of third-party sources (xmipp/scipion) — never vendor these
+protocol_*.py
+viewer_*.py

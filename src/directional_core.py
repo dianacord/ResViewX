@@ -69,6 +69,20 @@ def direction_resolution(dr_grid, direction):
     return val if np.isfinite(val) else None
 
 
+def compute_directional(half1, half2, mask, sampling_rate=1.0, cone_angle=17.0,
+                        threshold=0.143, fast=False, progress_callback=None):
+    """Run the real FSO on two half maps.
+
+    Returns the dict the GUI consumes: freq, res, fso, bingham, crossings,
+    global_fsc, plus dr_grid (zenith x azimuth resolutions in A).
+    """
+    from .fso_core import compute_fso
+    return compute_fso(half1, half2, mask,
+                       sampling_rate=sampling_rate, cone_angle=cone_angle,
+                       threshold=threshold, fast=fast,
+                       progress_callback=progress_callback)
+
+
 def fake_fso(sampling_rate=1.0, n=120, drop_from=5.7, drop_to=4.0):
     """Placeholder FSO curve + Bingham p-value.
 
