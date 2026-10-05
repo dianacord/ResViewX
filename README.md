@@ -17,8 +17,11 @@ A ChimeraX plugin for cryo-EM map validation: **global Fourier Shell Correlation
 - Colors a copy of the map surface by local resolution using a matplotlib `rainbow` palette, with a matching color key in the 3D view.
 
 ### Directional Resolution tab (in progress)
-- Inputs and outputs follow Xmipp's MonoDir protocol: degree of anisotropy, mean/radial/azimuthal, and highest/lowest resolution.
-- Metric selector, histogram, and map coloring are in place; the computation is currently a placeholder until MonoDir is ported.
+Based on Xmipp's **FSO** (Fourier Shell Occupancy, `xmipp_resolution_fso`). Takes two half maps + a mask, a cone angle and an FSC threshold.
+- **FSO curve**: fraction of directions per resolution shell still above the FSC threshold (green), with the Bingham test p-value (red dashed) and the anisotropy band shaded between the FSO = 0.9 and 0.1 crossings. The wider the band, the more anisotropic the map.
+- **DR polar plot**: resolution as a function of direction — azimuth around the circle, zenith angle as the radius.
+- **Color by viewing direction**: paints the map a single colour, the directional resolution along the current viewing direction, updating as the map is rotated.
+- The computation itself is a placeholder until `xmipp_resolution_fso` is ported.
 
 ## Requirements
 - ChimeraX 1.11
@@ -40,6 +43,6 @@ src/
 ├── fsc_core.py          # Pure-numpy FSC math
 ├── localres_core.py     # Local resolution (MonoRes wrapper)
 ├── monores_core.py      # MonoRes, pure NumPy
-├── directional_core.py  # Directional resolution (placeholder)
+├── directional_core.py  # Directional resolution / FSO (placeholder)
 └── tool.py           # Qt GUI panel (both tabs)
 ```

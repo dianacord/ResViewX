@@ -29,9 +29,7 @@ class FSCTool(ToolInstance):
         self._lr_output = None
         self._lr_vol = None   # the ChimeraX volume created from lr output
 
-        # Directional resolution state
-        self._dr_output = None   # dict: metric key -> per-voxel array
-        self._dr_vol = None
+        # Directional resolution (FSO) state
         self._dr_fso = None      # FSO curve data
         self._dr_dr = None       # (zenith, azimuth) resolution grid
         self._dr_view_handler = None
@@ -679,50 +677,38 @@ class FSCTool(ToolInstance):
                               f'xpos 0.05 ypos 0.12 size 14')
 
     # ==================================================================
-    # Tab 3 — Directional Resolution (MonoDir)
+    # Tab 3 — Directional Resolution (FSO)
     # ==================================================================
 
     def _build_directional_tab(self, layout):
-        from .directional_core import METRICS
-
-        hint = QLabel("One map + a mask. MonoRes runs first internally, then MonoDir.")
+        hint = QLabel("Two half maps + a mask (Xmipp FSO).")
         hint.setStyleSheet("color: grey; font-size: 11px;")
         layout.addWidget(hint)
 
         form = QFormLayout()
         form.setSpacing(4)
 
-        self._dr_map_combo = QComboBox()
+        self._dr_half1_combo = QComboBox()
+        self._dr_half2_combo = QComboBox()
         self._dr_mask_combo = QComboBox()
-        for combo in (self._dr_map_combo, self._dr_mask_combo):
+        for combo in (self._dr_half1_combo, self._dr_half2_combo, self._dr_mask_combo):
             combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(12)
             combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._dr_map_combo.currentIndexChanged.connect(self._dr_auto_fill_pixel_size)
+        self._dr_half1_combo.currentIndexChanged.connect(self._dr_auto_fill_pixel_size)
 
         self._dr_pix_spin = QDoubleSpinBox()
         self._dr_pix_spin.setRange(0.001, 100.0)
         self._dr_pix_spin.setDecimals(4)
         self._dr_pix_spin.setSingleStep(0.001)
         self._dr_pix_spin.setValue(1.0)
-        self._dr_pix_spin.setSuffix("  Å/vox")
-
-        self._dr_signif_spin = QDoubleSpinBox()
-        self._dr_signif_spin.setRange(0.5, 0.999)
-        self._dr_signif_spin.setDecimals(3)
-        self._dr_signif_spin.setValue(0.95)
-
-        self._dr_step_spin = QDoubleSpinBox()
-        self._dr_step_spin.setRange(0.05, 10.0)
-        self._dr_step_spin.setDecimals(2)
-        self._dr_step_spin.setValue(0.5)
-        self._dr_step_spin.setSuffix(" Å")
+        self._dr_pix_spin.setSuffix("  \u00c5/vox")
 
         self._dr_cone_spin = QDoubleSpinBox()
         self._dr_cone_spin.setRange(1.0, 90.0)
         self._dr_cone_spin.setDecimals(1)
         self._dr_cone_spin.setValue(17.0)
-        self._dr_cone_spin.setSuffix(" °")
+        self._dr_cone_spin.setSuffix(" \u00b0")
         self._dr_cone_spin.setToolTip("Half-angle of the Fourier cone used per direction")
 
         self._dr_thresh_spin = QDoubleSpinBox()
@@ -730,30 +716,15 @@ class FSCTool(ToolInstance):
         self._dr_thresh_spin.setDecimals(3)
         self._dr_thresh_spin.setSingleStep(0.001)
         self._dr_thresh_spin.setValue(0.143)
-        self._dr_thresh_spin.setToolTip("FSC threshold a direction must exceed to count as occupied")
+        self._dr_thresh_spin.setToolTip(
+            "FSC threshold a direction must exceed to count as occupied")
 
-        self._dr_fast_check = QCheckBox("Fast computation (recommended for large volumes)")
-        self._dr_premask_check = QCheckBox("Input map is premasked (spherical mask)")
-        self._dr_premask_check.toggled.connect(self._on_dr_premask_toggled)
-
-        self._dr_radius_label = QLabel("Spherical mask radius:")
-        self._dr_radius_spin = QDoubleSpinBox()
-        self._dr_radius_spin.setRange(-1.0, 100000.0)
-        self._dr_radius_spin.setDecimals(1)
-        self._dr_radius_spin.setValue(-1.0)
-        self._dr_radius_spin.setSuffix(" px")
-        self._dr_radius_spin.setToolTip("-1 = use half the box size")
-
-        form.addRow("Map:", self._dr_map_combo)
+        form.addRow("Half map 1:", self._dr_half1_combo)
+        form.addRow("Half map 2:", self._dr_half2_combo)
         form.addRow("Mask:", self._dr_mask_combo)
         form.addRow("Pixel size:", self._dr_pix_spin)
-        form.addRow("Significance:", self._dr_signif_spin)
-        form.addRow("Resolution step:", self._dr_step_spin)
         form.addRow("Cone angle:", self._dr_cone_spin)
         form.addRow("FSC threshold:", self._dr_thresh_spin)
-        form.addRow("", self._dr_fast_check)
-        form.addRow("", self._dr_premask_check)
-        form.addRow(self._dr_radius_label, self._dr_radius_spin)
         layout.addLayout(form)
 
         self._dr_compute_btn = QPushButton("Compute Directional Resolution")
@@ -763,7 +734,7 @@ class FSCTool(ToolInstance):
         self._dr_progress = QProgressBar()
         self._dr_progress.setRange(0, 100)
         self._dr_progress.setTextVisible(True)
-        self._dr_progress.setFormat("Computing Directional Resolution…  %p%")
+        self._dr_progress.setFormat("Computing Directional Resolution\u2026  %p%")
         self._dr_progress.setVisible(False)
         layout.addWidget(self._dr_progress)
 
@@ -788,51 +759,9 @@ class FSCTool(ToolInstance):
         polar_page.setLayout(polar_layout)
         plot_tabs.addTab(polar_page, "DR polar")
 
-        hist_page = QWidget()
-        hist_layout = QVBoxLayout()
-        hist_layout.setContentsMargins(0, 0, 0, 0)
-        hist_layout.setSpacing(4)
-
-        metric_row = QHBoxLayout()
-        metric_row.addWidget(QLabel("Metric:"))
-        self._dr_metric_combo = QComboBox()
-        for key, (label, _units, _rng) in METRICS.items():
-            self._dr_metric_combo.addItem(label, userData=key)
-        self._dr_metric_combo.currentIndexChanged.connect(self._on_dr_metric_changed)
-        metric_row.addWidget(self._dr_metric_combo, 1)
-        hist_layout.addLayout(metric_row)
-
-        range_row = QHBoxLayout()
-        range_row.addWidget(QLabel("Display range:"))
-        self._dr_min_spin = QDoubleSpinBox()
-        self._dr_min_spin.setRange(0.0, 1000.0)
-        self._dr_min_spin.setDecimals(2)
-        self._dr_max_spin = QDoubleSpinBox()
-        self._dr_max_spin.setRange(0.0, 1000.0)
-        self._dr_max_spin.setDecimals(2)
-        self._dr_max_spin.setValue(1.0)
-        range_row.addWidget(self._dr_min_spin)
-        range_row.addWidget(QLabel("to"))
-        range_row.addWidget(self._dr_max_spin)
-        range_row.addStretch()
-        hist_layout.addLayout(range_row)
-
-        self._dr_update_btn = QPushButton("Update Histogram")
-        self._dr_update_btn.clicked.connect(self._on_dr_update_histogram)
-        self._dr_update_btn.setEnabled(False)
-        hist_layout.addWidget(self._dr_update_btn)
-        hist_layout.addWidget(self._make_dr_canvas())
-        hist_page.setLayout(hist_layout)
-        plot_tabs.addTab(hist_page, "Metric histogram")
-
         layout.addWidget(plot_tabs)
 
-        # --- 3D coloring --------------------------------------------------
-        self._dr_color_btn = QPushButton("Color Map by Selected Metric")
-        self._dr_color_btn.clicked.connect(self._on_dr_color_map)
-        self._dr_color_btn.setEnabled(False)
-        layout.addWidget(self._dr_color_btn)
-
+        # --- 3D colouring by viewing direction ---------------------------
         self._dr_view_check = QCheckBox(
             "Color map by viewing direction (updates as you rotate)")
         self._dr_view_check.setToolTip(
@@ -845,27 +774,6 @@ class FSCTool(ToolInstance):
         self._dr_view_label = QLabel("")
         self._dr_view_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._dr_view_label)
-
-        self._on_dr_premask_toggled(False)
-
-    def _on_dr_premask_toggled(self, checked):
-        self._dr_radius_label.setVisible(bool(checked))
-        self._dr_radius_spin.setVisible(bool(checked))
-
-    def _make_dr_canvas(self):
-        from matplotlib.figure import Figure
-        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-        from matplotlib.gridspec import GridSpec
-
-        self._dr_fig = Figure(figsize=(5, 3.5), constrained_layout=True)
-        gs = GridSpec(2, 1, figure=self._dr_fig, height_ratios=[12, 1], hspace=0.05)
-        self._dr_ax_hist = self._dr_fig.add_subplot(gs[0])
-        self._dr_ax_cbar = self._dr_fig.add_subplot(gs[1])
-
-        self._dr_canvas = FigureCanvas(self._dr_fig)
-        self._dr_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._draw_empty_dr_axes()
-        return self._dr_canvas
 
     def _make_fso_canvas(self):
         from matplotlib.figure import Figure
@@ -991,7 +899,7 @@ class FSCTool(ToolInstance):
                 self.session.logger.error(
                     "Run Directional Resolution first.")
                 return
-            vol = self._dr_map_combo.currentData()
+            vol = self._dr_half1_combo.currentData()
             if vol is None:
                 self._dr_view_check.setChecked(False)
                 return
@@ -1064,31 +972,21 @@ class FSCTool(ToolInstance):
             return
         self._dr_view_label.setText(f"Viewing direction: {res:.2f} Å")
 
-    def _draw_empty_dr_axes(self):
-        self._dr_ax_hist.cla()
-        self._dr_ax_hist.set_xlabel("Metric value", fontsize=9)
-        self._dr_ax_hist.set_ylabel("Voxel count", fontsize=9)
-        self._dr_ax_hist.text(0.5, 0.5, "No data yet",
-                              transform=self._dr_ax_hist.transAxes,
-                              ha='center', va='center', fontsize=10, color='grey')
-        self._dr_ax_hist.grid(True, alpha=0.25)
-        self._dr_ax_cbar.set_visible(False)
-        self._dr_canvas.draw()
-
     def _refresh_dr_volume_list(self):
         from chimerax.map import Volume
         vols = self.session.models.list(type=Volume)
 
-        prev = self._dr_map_combo.currentData()
-        self._dr_map_combo.blockSignals(True)
-        self._dr_map_combo.clear()
-        sel = 0
-        for idx, v in enumerate(vols):
-            self._dr_map_combo.addItem(f"#{v.id_string}  {v.name}", userData=v)
-            if v is prev:
-                sel = idx
-        self._dr_map_combo.setCurrentIndex(sel)
-        self._dr_map_combo.blockSignals(False)
+        for combo in (self._dr_half1_combo, self._dr_half2_combo):
+            prev = combo.currentData()
+            combo.blockSignals(True)
+            combo.clear()
+            sel = 0
+            for idx, v in enumerate(vols):
+                combo.addItem(f"#{v.id_string}  {v.name}", userData=v)
+                if v is prev:
+                    sel = idx
+            combo.setCurrentIndex(sel)
+            combo.blockSignals(False)
 
         prev_mask = self._dr_mask_combo.currentData()
         self._dr_mask_combo.blockSignals(True)
@@ -1103,9 +1001,8 @@ class FSCTool(ToolInstance):
         self._dr_mask_combo.blockSignals(False)
 
         self._dr_auto_fill_pixel_size()
-
     def _dr_auto_fill_pixel_size(self):
-        vol = self._dr_map_combo.currentData()
+        vol = self._dr_half1_combo.currentData()
         if vol is not None:
             try:
                 step = float(vol.data.step[0])
@@ -1117,35 +1014,43 @@ class FSCTool(ToolInstance):
     # ---- compute ------------------------------------------------------
 
     def _on_dr_compute(self):
-        from .directional_core import fake_monodir, fake_fso, fake_dr
+        from .directional_core import fake_fso, fake_dr
 
-        map1 = self._dr_map_combo.currentData()
+        half1 = self._dr_half1_combo.currentData()
+        half2 = self._dr_half2_combo.currentData()
         mask = self._dr_mask_combo.currentData()
-        if map1 is None:
-            self.session.logger.error("Directional Resolution: please select a map.")
+        if half1 is None or half2 is None:
+            self.session.logger.error(
+                "Directional Resolution: please select both half maps.")
             return
+        if half1 is half2:
+            self.session.logger.warning(
+                "Half map 1 and half map 2 are the same model \u2014 "
+                "results will be trivial.")
         if mask is None:
-            msg = "A mask is required for MonoDir."
+            msg = "A mask is required for FSO."
             self.session.logger.error(f"Directional Resolution: {msg}")
             self._dr_status_label.setText(msg)
             self._dr_status_label.setStyleSheet("color: #c0392b;")
             return
 
+        v1 = half1.data.matrix()
+        v2 = half2.data.matrix()
+        if v1.shape != v2.shape:
+            self.session.logger.error(
+                f"Shape mismatch: {half1.name} {v1.shape} vs {half2.name} {v2.shape}")
+            return
+
         self._dr_compute_btn.setEnabled(False)
-        self._dr_status_label.setText("Computing…")
+        self._dr_status_label.setText("Computing\u2026")
         self._dr_status_label.setStyleSheet("")
         self._dr_progress.setValue(0)
         self._dr_progress.setVisible(True)
-        self.session.logger.status("Computing Directional Resolution …")
+        self.session.logger.status("Computing Directional Resolution \u2026")
 
-        vol = map1.data.matrix().astype(np.float64, copy=True)
-        mask_arr = mask.data.matrix().astype(np.float64, copy=True)
         pixel_size = self._dr_pix_spin.value()
-        significance = self._dr_signif_spin.value()
-        res_step = self._dr_step_spin.value()
-        fast = self._dr_fast_check.isChecked()
-        premasked = self._dr_premask_check.isChecked()
-        volume_radius = self._dr_radius_spin.value()
+        cone_angle = self._dr_cone_spin.value()
+        threshold = self._dr_thresh_spin.value()
 
         import threading, time
 
@@ -1156,50 +1061,47 @@ class FSCTool(ToolInstance):
         def worker():
             t0 = time.perf_counter()
             try:
-                out = fake_monodir(
-                    vol, mask_arr, sampling_rate=pixel_size,
-                    significance=significance, res_step=res_step, fast=fast,
-                    premasked=premasked, volume_radius=volume_radius,
-                    progress_callback=progress,
-                )
+                # Placeholder until xmipp_resolution_fso is ported. The real
+                # call will take v1, v2, mask, cone_angle and threshold.
+                n = 20
+                for i in range(n):
+                    time.sleep(0.02)
+                    progress((i + 1) / n)
                 fso = fake_fso(sampling_rate=pixel_size)
                 dr = fake_dr()
                 elapsed = time.perf_counter() - t0
-                self.session.ui.thread_safe(self._dr_on_done, out, fso, dr, elapsed)
+                self.session.ui.thread_safe(self._dr_on_done, fso, dr, elapsed)
             except Exception as e:
                 self.session.ui.thread_safe(self._dr_on_error, str(e))
 
         threading.Thread(target=worker, daemon=True).start()
-
     def _dr_set_progress(self, pct):
         self._dr_progress.setValue(pct)
         self._dr_progress.setFormat("Computing Directional Resolution…  %p%")
 
-    def _dr_on_done(self, out, fso, dr, elapsed):
-        self._dr_output = out
+    def _dr_on_done(self, fso, dr, elapsed):
         self._dr_fso = fso
         self._dr_dr = dr
-        self._dr_apply_metric_range()
         self._dr_draw_fso()
         self._dr_draw_polar()
-        self._dr_update_btn.setEnabled(True)
-        self._dr_color_btn.setEnabled(True)
         self._dr_view_check.setEnabled(True)
         self._dr_compute_btn.setEnabled(True)
         self._dr_progress.setVisible(False)
         self._dr_status_label.setText(f"Done in {elapsed:.1f} s")
         self._dr_status_label.setStyleSheet("color: #27ae60;")
-        from .directional_core import METRICS
-        lines = [f"Directional resolution computed in {elapsed:.1f} s."]
-        for key, arr in out.items():
-            v = arr[np.isfinite(arr)]
-            if v.size:
-                lines.append(f"  {METRICS[key][0]:<32} "
-                             f"{float(np.percentile(v, 2)):.2f} – "
-                             f"{float(np.percentile(v, 98)):.2f}")
+
+        cr = fso["crossings"]
+        lines = [f"Directional resolution (FSO) computed in {elapsed:.1f} s."]
+        for thr in (0.9, 0.5, 0.1):
+            if cr.get(thr):
+                lines.append(f"  FSO = {thr}  \u2192  {cr[thr]:.2f} \u00c5")
+        if cr.get(0.9) and cr.get(0.1):
+            lines.append(f"  Anisotropy band: {cr[0.9]:.2f} \u2013 {cr[0.1]:.2f} \u00c5 "
+                         f"(width {cr[0.9] - cr[0.1]:.2f} \u00c5)")
+        lines.append(f"  Directional resolution range: "
+                     f"{float(np.nanmin(dr)):.2f} \u2013 {float(np.nanmax(dr)):.2f} \u00c5")
         self.session.logger.info("\n".join(lines))
         self.session.logger.status("Directional resolution done.")
-
     def _dr_on_error(self, msg):
         self.session.logger.error(f"Directional resolution failed: {msg}")
         self._dr_status_label.setText(f"Error: {msg}")
@@ -1208,75 +1110,6 @@ class FSCTool(ToolInstance):
         self._dr_progress.setVisible(False)
 
     # ---- metric / histogram / color ----------------------------------
-
-    def _dr_current_key(self):
-        return self._dr_metric_combo.currentData()
-
-    def _dr_current_array(self):
-        if self._dr_output is None:
-            return None
-        return self._dr_output.get(self._dr_current_key())
-
-    def _dr_apply_metric_range(self):
-        """Set the display range to suit the selected metric, then redraw."""
-        from .directional_core import METRICS
-        arr = self._dr_current_array()
-        if arr is None:
-            return
-        fixed = METRICS[self._dr_current_key()][2]
-        if fixed is not None:
-            vmin, vmax = fixed
-        else:
-            v = arr[np.isfinite(arr)]
-            vmin = float(np.percentile(v, 2)) if v.size else 0.0
-            vmax = float(np.percentile(v, 98)) if v.size else 1.0
-        for spin, val in ((self._dr_min_spin, vmin), (self._dr_max_spin, vmax)):
-            spin.blockSignals(True)
-            spin.setValue(round(val, 2))
-            spin.blockSignals(False)
-        self._dr_draw_histogram(vmin, vmax)
-
-    def _dr_draw_histogram(self, vmin, vmax):
-        from .directional_core import METRICS
-        arr = self._dr_current_array()
-        if arr is None:
-            return
-        xlabel = METRICS[self._dr_current_key()][1]
-        self._draw_metric_histogram(self._dr_ax_hist, self._dr_ax_cbar,
-                                    self._dr_canvas, arr, vmin, vmax, xlabel)
-
-    def _on_dr_metric_changed(self, *args):
-        if self._dr_output is not None:
-            self._dr_apply_metric_range()
-
-    def _on_dr_update_histogram(self):
-        self._dr_draw_histogram(self._dr_min_spin.value(), self._dr_max_spin.value())
-
-    def _on_dr_color_map(self):
-        from .directional_core import METRICS
-        arr = self._dr_current_array()
-        if arr is None:
-            self.session.logger.error("Run Directional Resolution first.")
-            return
-        map1 = self._dr_map_combo.currentData()
-        if map1 is None:
-            return
-        key = self._dr_current_key()
-        label, units, _ = METRICS[key]
-        vmin = self._dr_min_spin.value()
-        vmax = self._dr_max_spin.value()
-        result = self._color_map_by_array(
-            map1, arr, vmin, vmax,
-            values_name=f"{label} values", copy_name=f"directional: {label}",
-            prev_attr="_dr_vol",
-            key_title=label if key == "doa" else f"{label} (Å)")
-        if result is not None:
-            map_copy, vals_vol = result
-            self.session.logger.info(
-                f"Colored map #{map_copy.id_string} ({map1.name}) by {label}, "
-                f"range {vmin:.2f}–{vmax:.2f} ({units}).\n"
-                f"Values volume: #{vals_vol.id_string} (hidden)"
-            )
 
     def _make_progress_cb(self, progressbar, prefix):
         """Return a callback(fraction 0..1) that drives a QProgressBar and
