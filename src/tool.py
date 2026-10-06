@@ -34,7 +34,6 @@ class FSCTool(ToolInstance):
         self._dr_dr = None       # (zenith, azimuth) resolution grid
         self._dr_view_handler = None
         self._dr_view_vol = None
-        self._dr_saved_colors = []
         self._dr_last_dir = None
 
         self._build_ui()
@@ -567,6 +566,49 @@ class FSCTool(ToolInstance):
                 f"Resolution values volume: #{vals_vol.id_string} (hidden)"
             )
 
+    def _make_surface_copy(self, map1, copy_name):
+        """Copy `map1` as a new volume shown as a surface, so the original is
+        never modified. The copy is built with its final name because Volume
+        Viewer reads a map's name only when the model is added and ignores
+        later renames. Returns the copy, or None on failure."""
+        from chimerax.map_data import ArrayGridData
+        from chimerax.map import volume_from_grid_data
+        from chimerax.core.commands import run
+
+        copy_grid = ArrayGridData(map1.data.matrix().copy(),
+                                  origin=map1.data.origin,
+                                  step=map1.data.step, name=copy_name)
+        map_copy = volume_from_grid_data(copy_grid, self.session, open_model=True)
+        if map_copy is None:
+            self.session.logger.error("Could not create a copy of the map.")
+            return None
+        map_copy.name = copy_name
+
+        # The surface needs real geometry before it can be coloured. Use the
+        # original's contour level if it has one, else derive one.
+        level = None
+        try:
+            surfs = map1.surfaces
+            if surfs:
+                level = float(surfs[0].level)
+        except Exception:
+            level = None
+        if level is None:
+            data = map_copy.data.matrix()
+            level = float(np.nanmean(data) + 3.0 * np.nanstd(data))
+        run(self.session, f"volume #{map_copy.id_string} level {level} style surface")
+
+        # ChimeraX builds big surfaces in a background thread; force them to
+        # finish now so the geometry exists when we colour it.
+        try:
+            ro = map_copy.rendering_options
+            for s in map_copy.surfaces:
+                s.set_level(s.level, use_thread=False)
+                s.update_surface(ro)
+        except Exception as e:
+            self.session.logger.warning(f"Surface pre-compute skipped: {e}")
+        return map_copy
+
     def _color_map_by_array(self, map1, array, vmin, vmax,
                             values_name, copy_name, prev_attr, key_title):
         """Shared by the Local and Directional tabs: build a ChimeraX volume
@@ -601,42 +643,10 @@ class FSCTool(ToolInstance):
         vals_vol = volume_from_grid_data(grid, self.session, open_model=True)
         setattr(self, prev_attr, vals_vol)
 
-        # Copy map1 so the original stays untouched. Build the copy ourselves
-        # with its final name: Volume Viewer reads the name only once, when the
-        # model is added, and does not pick up later renames.
-        copy_grid = ArrayGridData(map1.data.matrix().copy(),
-                                  origin=map1.data.origin,
-                                  step=map1.data.step, name=copy_name)
-        map_copy = volume_from_grid_data(copy_grid, self.session, open_model=True)
+        map_copy = self._make_surface_copy(map1, copy_name)
         if map_copy is None:
-            self.session.logger.error("Could not create a copy of the map.")
             return None
-        map_copy.name = copy_name
         setattr(self, prev_attr + "_copy", map_copy)
-
-        # The copy needs a surface with real geometry before 'color sample'
-        # can paint it. Use the original's level if it has one, else statistics.
-        level = None
-        try:
-            surfs = map1.surfaces
-            if surfs:
-                level = float(surfs[0].level)
-        except Exception:
-            level = None
-        if level is None:
-            data = map_copy.data.matrix()
-            level = float(np.nanmean(data) + 3.0 * np.nanstd(data))
-        run(self.session, f"volume #{map_copy.id_string} level {level} style surface")
-
-        # ChimeraX computes big surfaces in a background thread; force them to
-        # finish synchronously so the geometry exists when we color it.
-        try:
-            ro = map_copy.rendering_options
-            for s in map_copy.surfaces:
-                s.set_level(s.level, use_thread=False)
-                s.update_surface(ro)
-        except Exception as e:
-            self.session.logger.warning(f"Surface pre-compute skipped: {e}")
 
         # Palette sampled from matplotlib 'rainbow' so the map matches the histogram
         palette = self._matplotlib_palette('rainbow', vmin, vmax, n=32)
@@ -905,18 +915,18 @@ class FSCTool(ToolInstance):
                 self.session.logger.error(
                     "Run Directional Resolution first.")
                 return
-            vol = self._dr_half1_combo.currentData()
+            src_map = self._dr_half1_combo.currentData()
+            if src_map is None:
+                self._dr_view_check.setChecked(False)
+                return
+            # Work on a copy, like the Local Resolution tab, so the user's own
+            # half map is never recoloured.
+            self._dr_close_view_copy()
+            vol = self._make_surface_copy(src_map, "directional resolution")
             if vol is None:
                 self._dr_view_check.setChecked(False)
                 return
             self._dr_view_vol = vol
-            # Remember the surface colours so we can put them back
-            self._dr_saved_colors = []
-            try:
-                for s in vol.surfaces:
-                    self._dr_saved_colors.append((s, s.color, s.vertex_colors))
-            except Exception:
-                pass
             self._dr_last_dir = None
             self._dr_view_handler = self.session.triggers.add_handler(
                 'new frame', self._dr_view_frame_cb)
@@ -929,15 +939,19 @@ class FSCTool(ToolInstance):
             if h is not None:
                 self.session.triggers.remove_handler(h)
                 self._dr_view_handler = None
-            for s, color, vcolors in getattr(self, "_dr_saved_colors", []):
-                try:
-                    if not s.deleted:
-                        s.color = color
-                        s.vertex_colors = vcolors
-                except Exception:
-                    pass
-            self._dr_saved_colors = []
+            self._dr_close_view_copy()
             self._dr_view_label.setText("")
+
+    def _dr_close_view_copy(self):
+        from chimerax.core.commands import run
+        vol = getattr(self, "_dr_view_vol", None)
+        if vol is not None:
+            try:
+                if not vol.deleted:
+                    run(self.session, f"close #{vol.id_string}")
+            except Exception:
+                pass
+            self._dr_view_vol = None
 
     def _dr_view_frame_cb(self, trigger_name, data):
         """Each frame: if the camera moved, recolour the map with the colour of
