@@ -940,6 +940,7 @@ class FSCTool(ToolInstance):
                 self.session.triggers.remove_handler(h)
                 self._dr_view_handler = None
             self._dr_close_view_copy()
+            self._clear_view_readout()
             self._dr_view_label.setText("")
 
     def _dr_close_view_copy(self):
@@ -990,7 +991,33 @@ class FSCTool(ToolInstance):
                 s.color = color255
         except Exception:
             return
-        self._dr_view_label.setText(f"Viewing direction: {res:.2f} Å")
+        text = f"Viewing direction: {res:.2f} Å"
+        self._dr_view_label.setText(text)
+        self._set_view_readout(text)
+
+    def _set_view_readout(self, text):
+        """Live readout in the 3D view, just above the colour key. Created once
+        then updated in place — going through the 2dlabels command every frame
+        would fill the log."""
+        from chimerax.label.label2d import find_label
+        from chimerax.core.commands import run
+        lbl = find_label(self.session, "fsc_dir_readout")
+        if lbl is None:
+            run(self.session,
+                f'2dlabels create fsc_dir_readout text "{text}" '
+                f'xpos 0.05 ypos 0.17 size 14')
+        else:
+            lbl.text = text
+            lbl.update_drawing()
+
+    def _clear_view_readout(self):
+        from chimerax.label.label2d import find_label
+        lbl = find_label(self.session, "fsc_dir_readout")
+        if lbl is not None:
+            try:
+                lbl.delete()
+            except Exception:
+                pass
 
     def _refresh_dr_volume_list(self):
         from chimerax.map import Volume
