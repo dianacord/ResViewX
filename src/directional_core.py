@@ -48,6 +48,24 @@ def fso_crossings(res_axis, fso, thresholds=(0.9, 0.5, 0.1)):
     return out
 
 
+def direction_angles(direction):
+    """(azimuth, zenith) in degrees for a 3D direction vector.
+
+    Same convention as the DR polar plot: azimuth is the angle around the
+    circle, zenith the angle from the pole used as the radius. Directions are
+    antipodally symmetric, so |z| folds onto one hemisphere.
+    Returns None for a zero vector.
+    """
+    x, y, z = [float(v) for v in direction[:3]]
+    n = math.sqrt(x * x + y * y + z * z)
+    if n == 0.0:
+        return None
+    x, y, z = x / n, y / n, z / n
+    zenith = math.degrees(math.acos(min(1.0, abs(z))))
+    azimuth = math.degrees(math.atan2(y, x)) % 360.0
+    return azimuth, zenith
+
+
 def direction_resolution(dr_grid, direction):
     """Look up directional resolution (Å) for a 3D direction vector.
 

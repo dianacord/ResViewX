@@ -34,6 +34,7 @@ class FSCTool(ToolInstance):
         self._dr_dr = None       # (zenith, azimuth) resolution grid
         self._dr_view_handler = None
         self._dr_view_vol = None
+        self._dr_view_mode = None
         self._dr_last_dir = None
 
         self._build_ui()
@@ -90,7 +91,146 @@ class FSCTool(ToolInstance):
     # Tab 1 — Global FSC
     # ==================================================================
 
+    # ==================================================================
+    # Help and citation buttons, shared by all three tabs
+    # ==================================================================
+
+    HELP_TEXT = {
+        "fsc": (
+            "<b>Global FSC</b><br><br>"
+            "Measures how well two half maps agree at each spatial frequency, "
+            "and reports the resolution where that agreement falls below a "
+            "threshold.<br><br>"
+            "<b>Map vs Map</b> compares two half maps. <b>Map vs Atomic model</b> "
+            "simulates a map from an atomic model with <tt>molmap</tt> and "
+            "compares against that.<br><br>"
+            "<b>Threshold</b> defaults to 0.143 for half maps and 0.5 for "
+            "map-to-model, the usual conventions.<br>"
+            "<b>Pixel size</b> is read from the map header; it rescales every "
+            "resolution, so check it is right.<br>"
+            "<b>Mask</b> is optional, but an unmasked FSC includes solvent noise "
+            "and usually reports a worse resolution.<br><br>"
+            "Click anywhere on the plot to read off resolution, frequency and "
+            "FSC at that point.<br><br>"
+            "From the command line: <tt>fsc #1 #2 mask #3</tt>"),
+        "local": (
+            "<b>Local Resolution</b><br><br>"
+            "Estimates resolution separately at every voxel, so you can see "
+            "which parts of the map are well resolved and which are not. The "
+            "colour varies across the structure and does not change as you "
+            "rotate it.<br><br>"
+            "<b>Map 1</b> and a <b>mask</b> are required; a second half map is "
+            "optional and improves the noise estimate.<br>"
+            "<b>Max resolution</b> is the low-resolution end where the sweep "
+            "starts; it steps down towards Nyquist (2 x pixel size).<br>"
+            "<b>Step size</b> is the resolution increment, minimum 0.25 A.<br>"
+            "<b>Significance</b> is the confidence level of the signal/noise "
+            "test.<br><br>"
+            "Set the display range and press Enter to rescale the histogram. "
+            "<b>Color Map in ChimeraX</b> paints a copy of the map, leaving "
+            "your original untouched."),
+        "directional": (
+            "<b>Directional Resolution</b><br><br>"
+            "Measures resolution as a function of direction, which reveals "
+            "anisotropy: a map can be sharp in one direction and blurred in "
+            "another, usually because particles adopted preferred "
+            "orientations.<br><br>"
+            "<b>Two different half maps</b> are required; a mask is optional "
+            "but restricts the measurement to the specimen.<br>"
+            "<b>Cone angle</b> is the half-angle of the Fourier cone sampled "
+            "per direction. <b>FSC threshold</b> is what a direction must "
+            "exceed to count as occupied.<br><br>"
+            "<b>FSO curve</b>: the fraction of directions still above the "
+            "threshold in each shell. It falls from 1 to 0, and the width of "
+            "that fall is the anisotropy &mdash; wider means more anisotropic.<br>"
+            "<b>DR polar</b>: resolution per direction, azimuth around the "
+            "circle and zenith as the radius.<br><br>"
+            "<b>Color by viewing direction</b> paints the whole map one colour, "
+            "the resolution along the direction you are looking from.<br>"
+            "<b>Color by reliability</b> shows the same thing on an arbitrary "
+            "+1 to -1 scale with the colours reversed. It avoids implying that "
+            "the Angstrom value belongs to the surface you are looking at: the "
+            "resolution limiting a given view lies perpendicular to it."),
+    }
+
+    CITATIONS = {
+        "fsc": [
+            ("FSC 0.143 resolution criterion",
+             "Rosenthal, P.B. &amp; Henderson, R. (2003). Optimal determination of "
+             "particle orientation, absolute hand, and contrast loss in "
+             "single-particle electron cryomicroscopy. J Mol Biol 333(4), "
+             "721-745. doi:10.1016/j.jmb.2003.07.013"),
+            ("Simulated maps from atomic models (molmap) and the host application",
+             "Meng, E.C. et al. (2023). UCSF ChimeraX: Tools for structure "
+             "building and analysis. Protein Sci 32(11), e4792. "
+             "doi:10.1002/pro.4792"),
+        ],
+        "local": [
+            ("MonoRes local resolution",
+             "Vilas, J.L. et al. (2018). MonoRes: Automatic and Accurate "
+             "Estimation of Local Resolution for Electron Microscopy Maps. "
+             "Structure 26(2), 337-344.e4. doi:10.1016/j.str.2017.12.018"),
+            ("Host application",
+             "Meng, E.C. et al. (2023). UCSF ChimeraX: Tools for structure "
+             "building and analysis. Protein Sci 32(11), e4792. "
+             "doi:10.1002/pro.4792"),
+        ],
+        "directional": [
+            ("Fourier Shell Occupancy and the Bingham anisotropy test",
+             "Vilas, J.L., Tagare, H.D., Vargas, J., Carazo, J.M. &amp; Sorzano, "
+             "C.O.S. (2023). New measures of anisotropy of cryo-EM maps. "
+             "Nat Methods 20, 1021-1024. doi:10.1038/s41592-023-01874-3"),
+            ("FSC 0.143 resolution criterion",
+             "Rosenthal, P.B. &amp; Henderson, R. (2003). J Mol Biol 333(4), "
+             "721-745. doi:10.1016/j.jmb.2003.07.013"),
+            ("Host application",
+             "Meng, E.C. et al. (2023). UCSF ChimeraX: Tools for structure "
+             "building and analysis. Protein Sci 32(11), e4792. "
+             "doi:10.1002/pro.4792"),
+        ],
+    }
+
+    def _make_help_row(self, key, title):
+        """A Help and a Citations button, used at the top of every tab."""
+        row = QHBoxLayout()
+        help_btn = QPushButton("Help")
+        help_btn.setToolTip("What this tab does and what the inputs mean")
+        help_btn.clicked.connect(lambda: self._show_help(key, title))
+        cite_btn = QPushButton("Citations")
+        cite_btn.setToolTip("Papers describing the algorithms used here")
+        cite_btn.clicked.connect(lambda: self._show_citations(key, title))
+        row.addStretch()
+        row.addWidget(help_btn)
+        row.addWidget(cite_btn)
+        return row
+
+    def _show_help(self, key, title):
+        from Qt.QtWidgets import QMessageBox
+        box = QMessageBox(self.tool_window.ui_area)
+        box.setWindowTitle(f"{title} \u2014 help")
+        box.setTextFormat(Qt.RichText)
+        box.setText(self.HELP_TEXT[key])
+        box.exec()
+
+    def _show_citations(self, key, title):
+        """Show the papers behind this tab, and copy them to the Log so they
+        can be pasted into a methods section."""
+        from Qt.QtWidgets import QMessageBox
+        entries = self.CITATIONS[key]
+        html = "<b>Please cite the methods you use.</b><br><br>" + "<br><br>".join(
+            f"<i>{what}</i><br>{ref}" for what, ref in entries)
+        box = QMessageBox(self.tool_window.ui_area)
+        box.setWindowTitle(f"{title} \u2014 citations")
+        box.setTextFormat(Qt.RichText)
+        box.setText(html)
+        box.exec()
+        plain = "\n\n".join(
+            f"{what}:\n  {ref}".replace("&amp;", "&") for what, ref in entries)
+        self.session.logger.info(f"{title} \u2014 algorithms used:\n{plain}")
+
     def _build_fsc_tab(self, layout):
+        layout.addLayout(self._make_help_row('fsc', 'Global FSC'))
+
         # Mode toggle
         mode_row = QHBoxLayout()
         self._mode_map = QRadioButton("Map vs Map")
@@ -253,6 +393,7 @@ class FSCTool(ToolInstance):
     # ==================================================================
 
     def _build_localres_tab(self, layout):
+        layout.addLayout(self._make_help_row('local', 'Local Resolution'))
         hint = QLabel("Two half maps (recommended) or one map. A mask is required.")
         hint.setStyleSheet("color: grey; font-size: 11px;")
         layout.addWidget(hint)
@@ -780,7 +921,11 @@ class FSCTool(ToolInstance):
     # ==================================================================
 
     def _build_directional_tab(self, layout):
-        hint = QLabel("Two half maps + a mask (Xmipp FSO).")
+        layout.addLayout(
+            self._make_help_row('directional', 'Directional Resolution'))
+        hint = QLabel(
+            "Measures how resolution varies with direction, from two half maps.\n"
+            "A mask is optional but restricts the measurement to the specimen.")
         hint.setStyleSheet("color: grey; font-size: 11px;")
         layout.addWidget(hint)
 
@@ -820,12 +965,12 @@ class FSCTool(ToolInstance):
 
         form.addRow("Half map 1:", self._dr_half1_combo)
         form.addRow("Half map 2:", self._dr_half2_combo)
-        form.addRow("Mask:", self._dr_mask_combo)
+        form.addRow("Mask (opt.):", self._dr_mask_combo)
         form.addRow("Pixel size:", self._dr_pix_spin)
         self._dr_fast_check = QCheckBox("Fast (81 directions instead of 321)")
         self._dr_fast_check.setToolTip(
-            "Xmipp samples 321 directions by default. The 81-direction set is "
-            "about 4x faster but samples the sphere more coarsely.")
+            "321 directions by default. The 81-direction set is about 4x "
+            "faster but samples the sphere more coarsely.")
 
         form.addRow("Cone angle:", self._dr_cone_spin)
         form.addRow("FSC threshold:", self._dr_thresh_spin)
@@ -873,8 +1018,20 @@ class FSCTool(ToolInstance):
             "Paints the whole map one colour: the directional resolution along "
             "the current viewing direction, using the DR polar colour scale.")
         self._dr_view_check.setEnabled(False)
-        self._dr_view_check.toggled.connect(self._on_dr_view_color_toggled)
+        self._dr_view_check.toggled.connect(self._on_dr_view_res_toggled)
         layout.addWidget(self._dr_view_check)
+
+        self._dr_view_rel_check = QCheckBox(
+            "Color map by reliability (inverted, arbitrary +1 to -1 scale)")
+        self._dr_view_rel_check.setToolTip(
+            "Same per-direction measurement, shown on an arbitrary reliability "
+            "scale with the colours reversed: +1 is the most reliable direction "
+            "and -1 the least. Deliberately not in Ångström, because the "
+            "resolution limiting a given view lies perpendicular to it, so a "
+            "direct resolution readout on the surface invites misreading.")
+        self._dr_view_rel_check.setEnabled(False)
+        self._dr_view_rel_check.toggled.connect(self._on_dr_view_rel_toggled)
+        layout.addWidget(self._dr_view_rel_check)
 
         self._dr_view_label = QLabel("")
         self._dr_view_label.setAlignment(Qt.AlignCenter)
@@ -971,6 +1128,13 @@ class FSCTool(ToolInstance):
         azimuths = np.radians(np.linspace(0, 360, n_azi, endpoint=False))
         theta, r = np.meshgrid(azimuths, zeniths)
 
+        if not np.isfinite(grid).any():
+            ax = self._polar_ax
+            ax.cla()
+            ax.set_title("No directional resolution to plot", fontsize=10,
+                         color='grey')
+            self._polar_canvas.draw()
+            return
         vmin = float(np.nanmin(grid))
         vmax = float(np.nanmax(grid))
         if vmax <= vmin:
@@ -991,46 +1155,89 @@ class FSCTool(ToolInstance):
         ax.set_theta_zero_location('E')
         ax.set_rlabel_position(135)
         ax.set_title("Directional resolution (Å)", fontsize=10)
+        # Say what the two polar axes are: angle = azimuth, radius = zenith
+        ax.text(np.radians(90), ax.get_rmax() * 1.18, "azimuth / rot (\u00b0)",
+                ha='center', va='bottom', fontsize=8, color='dimgrey')
+        ax.text(np.radians(137), ax.get_rmax() * 0.62, "zenith / tilt (\u00b0)",
+                ha='left', va='center', fontsize=8, color='dimgrey',
+                rotation=47, rotation_mode='anchor')
         self._polar_cbar = self._polar_fig.colorbar(pc, ax=ax, pad=0.1)
         self._polar_cbar.set_label("Resolution (Å)", fontsize=9)
         self._polar_canvas.draw()
 
     # ---- 3D: colour the whole map by the current viewing direction ----
 
-    def _on_dr_view_color_toggled(self, checked):
-        if checked:
+    def _on_dr_view_res_toggled(self, checked):
+        """Colour by directional resolution in Angstrom."""
+        if checked and self._dr_view_rel_check.isChecked():
+            self._dr_view_rel_check.blockSignals(True)
+            self._dr_view_rel_check.setChecked(False)
+            self._dr_view_rel_check.blockSignals(False)
+        self._dr_set_view_mode('resolution' if checked else None,
+                               self._dr_view_check)
+
+    def _on_dr_view_rel_toggled(self, checked):
+        """Colour by reliability: the same measurement on an arbitrary +1..-1
+        scale with the colours reversed."""
+        if checked and self._dr_view_check.isChecked():
+            self._dr_view_check.blockSignals(True)
+            self._dr_view_check.setChecked(False)
+            self._dr_view_check.blockSignals(False)
+        self._dr_set_view_mode('reliability' if checked else None,
+                               self._dr_view_rel_check)
+
+    def _dr_set_view_mode(self, mode, source_check):
+        """Start or stop colouring the map by the current viewing direction.
+        `mode` is 'resolution', 'reliability', or None to switch off."""
+        if mode is not None:
             if getattr(self, "_dr_dr", None) is None:
-                self._dr_view_check.setChecked(False)
-                self.session.logger.error(
-                    "Run Directional Resolution first.")
+                source_check.blockSignals(True)
+                source_check.setChecked(False)
+                source_check.blockSignals(False)
+                self.session.logger.error("Run Directional Resolution first.")
                 return
             src_map = self._dr_half1_combo.currentData()
             if src_map is None:
-                self._dr_view_check.setChecked(False)
+                source_check.blockSignals(True)
+                source_check.setChecked(False)
+                source_check.blockSignals(False)
                 return
             # Work on a copy, like the Local Resolution tab, so the user's own
             # half map is never recoloured.
-            self._dr_close_view_copy()
+            self._dr_stop_view_colouring()
             vol = self._make_surface_copy(src_map, "directional resolution")
             if vol is None:
-                self._dr_view_check.setChecked(False)
+                source_check.blockSignals(True)
+                source_check.setChecked(False)
+                source_check.blockSignals(False)
                 return
+            self._dr_view_mode = mode
             self._dr_view_vol = vol
             self._dr_last_dir = None
             self._dr_view_handler = self.session.triggers.add_handler(
                 'new frame', self._dr_view_frame_cb)
             grid = self._dr_dr
-            self._show_color_key(float(np.nanmin(grid)), float(np.nanmax(grid)),
-                                 "Directional resolution (Å)")
+            if mode == 'reliability':
+                # Reversed colours on an arbitrary scale: -1 (least reliable,
+                # i.e. worst resolution) is purple, +1 is red.
+                self._show_color_key(-1.0, 1.0, "Reliability (arbitrary scale)")
+            else:
+                self._show_color_key(float(np.nanmin(grid)),
+                                     float(np.nanmax(grid)),
+                                     "Directional resolution (\u00c5)")
             self._dr_view_frame_cb(None, None)   # paint immediately
         else:
-            h = getattr(self, "_dr_view_handler", None)
-            if h is not None:
-                self.session.triggers.remove_handler(h)
-                self._dr_view_handler = None
-            self._dr_close_view_copy()
-            self._clear_view_readout()
-            self._dr_view_label.setText("")
+            self._dr_stop_view_colouring()
+
+    def _dr_stop_view_colouring(self):
+        h = getattr(self, "_dr_view_handler", None)
+        if h is not None:
+            self.session.triggers.remove_handler(h)
+            self._dr_view_handler = None
+        self._dr_view_mode = None
+        self._dr_close_view_copy()
+        self._clear_view_readout()
+        self._dr_view_label.setText("")
 
     def _dr_close_view_copy(self):
         from chimerax.core.commands import run
@@ -1044,11 +1251,11 @@ class FSCTool(ToolInstance):
             self._dr_view_vol = None
 
     def _dr_view_frame_cb(self, trigger_name, data):
-        """Each frame: if the camera moved, recolour the map with the colour of
-        the directional resolution along the new viewing direction."""
+        """Each frame: if the camera moved, recolour the map for the new
+        viewing direction and report that direction."""
         import matplotlib.cm as mcm
         import matplotlib.colors as mcolors
-        from .directional_core import direction_resolution
+        from .directional_core import direction_resolution, direction_angles
 
         vol = getattr(self, "_dr_view_vol", None)
         grid = getattr(self, "_dr_dr", None)
@@ -1067,20 +1274,39 @@ class FSCTool(ToolInstance):
         self._dr_last_dir = d
 
         res = direction_resolution(grid, d)
-        if res is None:
+        angles = direction_angles(d)
+        if res is None or angles is None:
             return
+        azimuth, zenith = angles
+
         vmin = float(np.nanmin(grid))
         vmax = float(np.nanmax(grid))
-        norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
-        rgba = mcm.get_cmap('rainbow')(norm(res))
+        span = (vmax - vmin) or 1e-9
+        mode = getattr(self, "_dr_view_mode", 'resolution')
+
+        if mode == 'reliability':
+            # +1 at the best resolution, -1 at the worst; colours reversed so
+            # the least reliable direction is purple rather than red.
+            reliability = 1.0 - 2.0 * (res - vmin) / span
+            frac = (reliability + 1.0) / 2.0
+            value_text = f"reliability {reliability:+.2f}  ({res:.2f} \u00c5)"
+        else:
+            frac = mcolors.Normalize(vmin=vmin, vmax=vmax)(res)
+            value_text = f"resolution {res:.2f} \u00c5"
+
+        rgba = mcm.get_cmap('rainbow')(float(frac))
         color255 = [int(round(255 * c)) for c in rgba]
         try:
-            for s in vol.surfaces:
-                s.vertex_colors = None   # uniform colour, not per-vertex
-                s.color = color255
+            for s_ in vol.surfaces:
+                s_.vertex_colors = None   # uniform colour, not per-vertex
+                s_.color = color255
         except Exception:
             return
-        text = f"Viewing direction: {res:.2f} Å"
+
+        # The direction is the polar coordinate pair, as read off the DR plot;
+        # the resolution is reported alongside it, not as the direction itself.
+        text = (f"Direction: azimuth {azimuth:.0f}\u00b0, "
+                f"zenith {zenith:.0f}\u00b0   |   {value_text}")
         self._dr_view_label.setText(text)
         self._set_view_readout(text)
 
@@ -1160,21 +1386,31 @@ class FSCTool(ToolInstance):
                 "Directional Resolution: please select both half maps.")
             return
         if half1 is half2:
-            self.session.logger.warning(
-                "Half map 1 and half map 2 are the same model \u2014 "
-                "results will be trivial.")
-        if mask is None:
-            msg = "A mask is required for FSO."
+            msg = ("Half map 1 and half map 2 are the same model. FSC between a "
+                   "map and itself is 1 at every frequency, so no direction ever "
+                   "reaches the threshold and no resolution can be reported. "
+                   "Select two different half maps.")
             self.session.logger.error(f"Directional Resolution: {msg}")
-            self._dr_status_label.setText(msg)
+            self._dr_status_label.setText("Select two different half maps.")
             self._dr_status_label.setStyleSheet("color: #c0392b;")
             return
-
         v1 = half1.data.matrix()
         v2 = half2.data.matrix()
         if v1.shape != v2.shape:
             self.session.logger.error(
-                f"Shape mismatch: {half1.name} {v1.shape} vs {half2.name} {v2.shape}")
+                f"Directional Resolution: the two half maps have different box "
+                f"sizes \u2014 {half1.name} is {v1.shape} and {half2.name} is "
+                f"{v2.shape}. They must be the same.")
+            self._dr_status_label.setText("Half maps have different box sizes.")
+            self._dr_status_label.setStyleSheet("color: #c0392b;")
+            return
+        if mask is not None and mask.data.matrix().shape != v1.shape:
+            self.session.logger.error(
+                f"Directional Resolution: the mask {mask.name} is "
+                f"{mask.data.matrix().shape} but the half maps are {v1.shape}. "
+                "Pick a mask on the same grid, or set Mask to None.")
+            self._dr_status_label.setText("Mask does not match the map grid.")
+            self._dr_status_label.setStyleSheet("color: #c0392b;")
             return
 
         self._dr_compute_btn.setEnabled(False)
@@ -1186,7 +1422,8 @@ class FSCTool(ToolInstance):
 
         v1 = v1.astype(np.float64, copy=True)
         v2 = v2.astype(np.float64, copy=True)
-        mask_arr = mask.data.matrix().astype(np.float64, copy=True)
+        mask_arr = (mask.data.matrix().astype(np.float64, copy=True)
+                    if mask is not None else None)
         pixel_size = self._dr_pix_spin.value()
         cone_angle = self._dr_cone_spin.value()
         threshold = self._dr_thresh_spin.value()
@@ -1219,11 +1456,20 @@ class FSCTool(ToolInstance):
         self._dr_progress.setFormat("Computing Directional Resolution…  %p%")
 
     def _dr_on_done(self, fso, dr, elapsed):
+        if dr is None or not np.isfinite(dr).any():
+            self._dr_on_error(
+                "no direction reached the FSC threshold, so there is no "
+                "resolution to report. This usually means the two half maps are "
+                "identical or nearly so \u2014 check that you selected two "
+                "genuinely different half maps, and not a map together with a "
+                "copy or a mask.")
+            return
         self._dr_fso = fso
         self._dr_dr = dr
         self._dr_draw_fso()
         self._dr_draw_polar()
         self._dr_view_check.setEnabled(True)
+        self._dr_view_rel_check.setEnabled(True)
         self._dr_compute_btn.setEnabled(True)
         self._dr_progress.setVisible(False)
         self._dr_status_label.setText(f"Done in {elapsed:.1f} s")
@@ -1648,7 +1894,8 @@ class FSCTool(ToolInstance):
     def delete(self):
         if getattr(self, "_dr_view_handler", None) is not None:
             try:
-                self._dr_view_check.setChecked(False)   # restores map colours
+                self._dr_view_check.setChecked(False)
+                self._dr_view_rel_check.setChecked(False)
             except Exception:
                 pass
         for h in self._handlers:
