@@ -131,8 +131,17 @@ def fsc_command(session, maps, pixel_size=None, mask=None,
     if plot:
         try:
             from .tool import FSCTool
-            tool = FSCTool(session, "FSC Plot")
+            # Reuse the panel if one is already open instead of stacking a new
+            # one on every command.
+            existing = session.tools.find_by_class(FSCTool)
+            tool = existing[0] if existing else FSCTool(session, "FSC Plot")
+            # Show what was actually computed, not whatever the dropdowns held
+            tool.set_fsc_inputs(map1, map2, mask_vol, pixel_size, threshold)
             tool.compute_and_show(map1, map2, pixel_size, mask_vol)
+            try:
+                tool.tool_window.shown = True
+            except Exception:
+                pass
         except Exception as e:
             session.logger.warning(f"Could not open the FSC panel: {e}")
 

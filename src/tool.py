@@ -57,6 +57,7 @@ class FSCTool(ToolInstance):
         root.setContentsMargins(0, 0, 0, 0)
 
         tabs = QTabWidget()
+        self._tabs = tabs
 
         fsc_widget = QWidget()
         fsc_layout = QVBoxLayout()
@@ -1431,6 +1432,39 @@ class FSCTool(ToolInstance):
             f"Simulated map: #{sim_map.id_string}  {sim_map.name}"
         )
         self.compute_and_show(map1, sim_map, pixel_size, mask)
+
+    def _select_combo_volume(self, combo, vol):
+        """Point a dropdown at a specific volume (or at 'None' for a mask).
+        Signals are blocked so this does not trigger the auto-fill handlers."""
+        combo.blockSignals(True)
+        idx = 0
+        for i in range(combo.count()):
+            if combo.itemData(i) is vol:
+                idx = i
+                break
+        combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+    def set_fsc_inputs(self, map1, map2, mask=None, pixel_size=None,
+                       threshold=None):
+        """Make the Global FSC tab show what the `fsc` command actually used,
+        rather than leaving the dropdowns on whatever was selected before."""
+        self._refresh_volume_list()
+        # Mode first: toggling it resets the threshold, so set that afterwards
+        self._mode_map.setChecked(True)
+        self._select_combo_volume(self._map1_combo, map1)
+        self._select_combo_volume(self._map2_combo, map2)
+        self._select_combo_volume(self._mask_combo, mask)
+        if pixel_size:
+            self._pix_spin.setValue(float(pixel_size))
+        if threshold:
+            self._thresh_spin.blockSignals(True)
+            self._thresh_spin.setValue(float(threshold))
+            self._thresh_spin.blockSignals(False)
+        try:
+            self._tabs.setCurrentIndex(0)      # bring the Global FSC tab forward
+        except Exception:
+            pass
 
     def compute_and_show(self, map1, map2, pixel_size, mask=None):
         """Public entry point — also called by the fsc command."""
