@@ -201,18 +201,51 @@ class FSCTool(ToolInstance):
         self._draw_empty_fsc_axes()
         self._canvas = FigureCanvas(self._fig)
         self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._fsc_click_marker = None
+        self._canvas.mpl_connect('button_press_event', self._on_fsc_click)
         return self._canvas
 
     def _draw_empty_fsc_axes(self):
         ax = self._ax
         ax.cla()
-        ax.set_xlabel("Spatial frequency (1/Å)", fontsize=9)
+        ax.set_xlabel("Resolution (Å)", fontsize=9)
         ax.set_ylabel("FSC", fontsize=9)
         ax.set_ylim(-0.05, 1.05)
         ax.axhline(0.143, color='tomato', linestyle='--', linewidth=1,
                    label='0.143 threshold')
         ax.legend(loc='upper right', fontsize=8)
         ax.grid(True, alpha=0.25)
+
+    def _on_fsc_click(self, event):
+        """Click anywhere on the FSC plot to read off that point."""
+        if event.inaxes is not self._ax or event.xdata is None:
+            return
+        freq, fsc = float(event.xdata), float(event.ydata)
+        if freq <= 0:
+            return
+        res = 1.0 / freq
+
+        # Replace the previous readout rather than stacking them
+        marker = getattr(self, "_fsc_click_marker", None)
+        if marker is not None:
+            for artist in marker:
+                try:
+                    artist.remove()
+                except Exception:
+                    pass
+
+        pt = self._ax.plot([freq], [fsc], marker='o', markersize=5,
+                           color='black', zorder=5)[0]
+        txt = self._ax.annotate(
+            f"{res:.2f} Å  ({freq:.4f} 1/Å)\nFSC = {fsc:.3f}",
+            xy=(freq, fsc), xytext=(8, 8), textcoords='offset points',
+            fontsize=8, zorder=6,
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow',
+                      edgecolor='grey', alpha=0.95))
+        self._fsc_click_marker = (pt, txt)
+        self._canvas.draw_idle()
+        self.session.logger.status(
+            f"FSC at {res:.2f} Å ({freq:.4f} 1/Å): {fsc:.3f}")
 
     # ==================================================================
     # Tab 2 — Local Resolution
@@ -255,9 +288,10 @@ class FSCTool(ToolInstance):
         self._lr_signif_spin.setDecimals(3)
         self._lr_signif_spin.setValue(0.95)
 
+        # Required inputs first, optional second half map after
         form.addRow("Map 1:", self._lr_map1_combo)
-        form.addRow("Map 2 (opt.):", self._lr_map2_combo)
         form.addRow("Mask:", self._lr_mask_combo)
+        form.addRow("Map 2 (opt.):", self._lr_map2_combo)
         form.addRow("Pixel size:", self._lr_pix_spin)
         form.addRow("Max resolution:", self._lr_maxres_spin)
         form.addRow("Step size:", self._lr_step_spin)
@@ -292,23 +326,72 @@ class FSCTool(ToolInstance):
         self._lr_res_max_spin.setDecimals(2)
         self._lr_res_max_spin.setValue(12.0)
         self._lr_res_max_spin.setSuffix(" Å")
+        # editingFinished fires on Enter or when the field loses focus, so the
+        # histogram follows the range without a separate button press.
+        for spin in (self._lr_res_min_spin, self._lr_res_max_spin):
+            spin.setKeyboardTracking(False)
+            spin.editingFinished.connect(self._on_lr_update_histogram)
         range_row.addWidget(self._lr_res_min_spin)
         range_row.addWidget(QLabel("to"))
         range_row.addWidget(self._lr_res_max_spin)
+
+        self._lr_cmap_combo = QComboBox()
+        for label, key in (("viridis", "viridis"), ("blue-white-red", "bwr")):
+            self._lr_cmap_combo.addItem(label, userData=key)
+        self._lr_cmap_combo.currentIndexChanged.connect(self._on_lr_update_histogram)
+        range_row.addWidget(QLabel("Colours:"))
+        range_row.addWidget(self._lr_cmap_combo)
         range_row.addStretch()
         layout.addLayout(range_row)
 
-        self._lr_update_btn = QPushButton("Update Histogram")
-        self._lr_update_btn.clicked.connect(self._on_lr_update_histogram)
-        self._lr_update_btn.setEnabled(False)
-        layout.addWidget(self._lr_update_btn)
-
         layout.addWidget(self._make_lr_canvas())
 
+        lr_btn_row = QHBoxLayout()
         self._lr_color_btn = QPushButton("Color Map in ChimeraX")
         self._lr_color_btn.clicked.connect(self._on_lr_color_map)
         self._lr_color_btn.setEnabled(False)
-        layout.addWidget(self._lr_color_btn)
+        self._lr_export_btn = QPushButton("Export histogram")
+        self._lr_export_btn.clicked.connect(self._on_lr_export_histogram)
+        self._lr_export_btn.setEnabled(False)
+        lr_btn_row.addWidget(self._lr_color_btn)
+        lr_btn_row.addWidget(self._lr_export_btn)
+        layout.addLayout(lr_btn_row)
+
+    def _lr_cmap(self):
+        """Colormap chosen for the local resolution tab."""
+        return self._lr_cmap_combo.currentData() or "viridis"
+
+    def _on_lr_export_histogram(self):
+        """Save the histogram as an image, or the underlying values as CSV."""
+        from Qt.QtWidgets import QFileDialog
+        import csv
+        if self._lr_output is None:
+            self.session.logger.error("Run Local Resolution first.")
+            return
+        path, selected = QFileDialog.getSaveFileName(
+            self.tool_window.ui_area, "Export histogram",
+            "local_resolution_histogram.png",
+            "PNG image (*.png);;PDF (*.pdf);;SVG (*.svg);;CSV data (*.csv)")
+        if not path:
+            return
+        if path.lower().endswith(".csv") or "CSV" in (selected or ""):
+            vmin = self._lr_res_min_spin.value()
+            vmax = self._lr_res_max_spin.value()
+            flat = self._lr_output.ravel()
+            flat = flat[np.isfinite(flat)]
+            counts, edges = np.histogram(
+                flat[(flat >= vmin) & (flat <= vmax)], bins=60,
+                range=(vmin, vmax))
+            with open(path, "w", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(["bin_start_A", "bin_end_A", "bin_center_A", "voxel_count"])
+                for i, c in enumerate(counts):
+                    w.writerow([f"{edges[i]:.4f}", f"{edges[i+1]:.4f}",
+                                f"{0.5*(edges[i]+edges[i+1]):.4f}", int(c)])
+            self.session.logger.info(f"Histogram data exported to {path}")
+        else:
+            self._lr_fig.savefig(path, dpi=150, bbox_inches="tight")
+            self.session.logger.info(f"Histogram image exported to {path}")
 
     def _make_lr_canvas(self):
         from matplotlib.figure import Figure
@@ -460,8 +543,8 @@ class FSCTool(ToolInstance):
 
         self._update_lr_histogram(output, data_min, data_max)
 
-        self._lr_update_btn.setEnabled(True)
         self._lr_color_btn.setEnabled(True)
+        self._lr_export_btn.setEnabled(True)
         self._lr_compute_btn.setEnabled(True)
         self._lr_progress.setVisible(False)
         self._lr_status_label.setText(
@@ -495,11 +578,13 @@ class FSCTool(ToolInstance):
     def _update_lr_histogram(self, output, res_min, res_max):
         self._draw_metric_histogram(self._lr_ax_hist, self._lr_ax_cbar,
                                     self._lr_canvas, output, res_min, res_max,
-                                    "Local resolution (Å)")
+                                    "Local resolution (Å)", self._lr_cmap())
 
-    def _draw_metric_histogram(self, ax, cax, canvas, output, vmin, vmax, xlabel):
+    def _draw_metric_histogram(self, ax, cax, canvas, output, vmin, vmax, xlabel,
+                               cmap_name='rainbow'):
         """Shared histogram + matching colorbar used by the Local and
-        Directional tabs. Bars are colored by value with matplotlib 'rainbow'."""
+        Directional tabs. Bars are coloured by value using `cmap_name`, which
+        must match whatever the map colouring and colour key use."""
         import matplotlib.cm as mcm
         import matplotlib.colors as mcolors
 
@@ -510,7 +595,7 @@ class FSCTool(ToolInstance):
         flat = flat[np.isfinite(flat)]
         in_range = flat[(flat >= vmin) & (flat <= vmax)]
 
-        cmap = mcm.get_cmap('rainbow')
+        cmap = mcm.get_cmap(cmap_name)
         norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
 
         ax.cla()
@@ -557,7 +642,8 @@ class FSCTool(ToolInstance):
         result = self._color_map_by_array(
             map1, self._lr_output, res_min, res_max,
             values_name="resolution values", copy_name="local resolution",
-            prev_attr="_lr_vol", key_title="Local resolution (Å)")
+            prev_attr="_lr_vol", key_title="Local resolution (Å)",
+            cmap_name=self._lr_cmap())
         if result is not None:
             map_copy, vals_vol = result
             self.session.logger.info(
@@ -610,7 +696,8 @@ class FSCTool(ToolInstance):
         return map_copy
 
     def _color_map_by_array(self, map1, array, vmin, vmax,
-                            values_name, copy_name, prev_attr, key_title):
+                            values_name, copy_name, prev_attr, key_title,
+                            cmap_name='rainbow'):
         """Shared by the Local and Directional tabs: build a ChimeraX volume
         from a per-voxel array, copy `map1`, and color the copy's surface by
         the array using a palette that matches the matplotlib histogram.
@@ -649,7 +736,7 @@ class FSCTool(ToolInstance):
         setattr(self, prev_attr + "_copy", map_copy)
 
         # Palette sampled from matplotlib 'rainbow' so the map matches the histogram
-        palette = self._matplotlib_palette('rainbow', vmin, vmax, n=32)
+        palette = self._matplotlib_palette(cmap_name, vmin, vmax, n=32)
         run(self.session,
             f"color sample #{map_copy.id_string} map #{vals_vol.id_string} "
             f"palette {palette} range {vmin},{vmax}")
@@ -657,17 +744,18 @@ class FSCTool(ToolInstance):
         # Hide the raw values volume so it doesn't obscure the colored map
         run(self.session, f"hide #{vals_vol.id_string} models")
 
-        self._show_color_key(vmin, vmax, key_title)
+        self._show_color_key(vmin, vmax, key_title, cmap_name=cmap_name)
         return map_copy, vals_vol
 
-    def _show_color_key(self, vmin, vmax, title, n=32, n_labels=5):
+    def _show_color_key(self, vmin, vmax, title, n=32, n_labels=5,
+                        cmap_name='rainbow'):
         """Draw the same matplotlib 'rainbow' colorbar in the 3D view (bottom
         left) so the color scale is visible while rotating the structure."""
         import matplotlib.cm as mcm
         import matplotlib.colors as mcolors
         from chimerax.core.commands import run
 
-        cmap = mcm.get_cmap('rainbow')
+        cmap = mcm.get_cmap(cmap_name)
         label_idx = {round(i * (n - 1) / (n_labels - 1)) for i in range(n_labels)}
         stops = []
         for i in range(n):
@@ -1486,12 +1574,19 @@ class FSCTool(ToolInstance):
         freq_axis = centers[1:] / pixel_size
         x_max = 0.5 / pixel_size
 
+        from matplotlib.ticker import FuncFormatter
+
         ax = self._ax
         ax.cla()
-        ax.set_xlabel("Spatial frequency (1/Å)", fontsize=9)
+        self._fsc_click_marker = None
+        # Same axis convention as the FSO plot: x is spatial frequency but the
+        # ticks are labelled with the resolution they correspond to.
+        ax.set_xlabel("Resolution (Å)", fontsize=9)
         ax.set_ylabel("FSC", fontsize=9)
         ax.set_ylim(-0.05, 1.05)
         ax.set_xlim(0, x_max)
+        ax.xaxis.set_major_formatter(
+            FuncFormatter(lambda v, p: f"{1.0 / v:.1f}" if v else ""))
         ax.grid(True, alpha=0.25)
 
         ax.plot(freq_axis, fsc_values[1:],
@@ -1509,7 +1604,7 @@ class FSCTool(ToolInstance):
                     bbox=dict(facecolor='white', edgecolor='none',
                               boxstyle='round,pad=0.2', alpha=0.8))
 
-        ax.legend(loc='upper left', fontsize=8)
+        ax.legend(loc='upper right', fontsize=8)
         self._canvas.draw()
 
     # ==================================================================
