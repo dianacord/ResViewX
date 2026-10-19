@@ -924,8 +924,7 @@ class FSCTool(ToolInstance):
         layout.addLayout(
             self._make_help_row('directional', 'Directional Resolution'))
         hint = QLabel(
-            "Measures how resolution varies with direction, from two half maps.\n"
-            "A mask is optional but restricts the measurement to the specimen.")
+            "Two different half maps. A mask is optional.")
         hint.setStyleSheet("color: grey; font-size: 11px;")
         layout.addWidget(hint)
 
@@ -1153,14 +1152,13 @@ class FSCTool(ToolInstance):
         pc = ax.contourf(theta, r, grid, levels=levels,
                          cmap='rainbow', extend='max')
         ax.set_theta_zero_location('E')
-        ax.set_rlabel_position(135)
-        ax.set_title("Directional resolution (Å)", fontsize=10)
-        # Say what the two polar axes are: angle = azimuth, radius = zenith
-        ax.text(np.radians(90), ax.get_rmax() * 1.18, "azimuth / rot (\u00b0)",
-                ha='center', va='bottom', fontsize=8, color='dimgrey')
-        ax.text(np.radians(137), ax.get_rmax() * 0.62, "zenith / tilt (\u00b0)",
-                ha='left', va='center', fontsize=8, color='dimgrey',
-                rotation=47, rotation_mode='anchor')
+        # Radial ticks between spokes so they clear the gridlines
+        ax.set_rlabel_position(112.5)
+        ax.set_title("Directional resolution (\u00c5)", fontsize=10, pad=12)
+        # Name both polar axes in one caption below the plot. Placing them
+        # inside the axes overlapped the angle ticks and the title.
+        ax.set_xlabel("angle = azimuth (\u00b0)    \u00b7    radius = zenith (\u00b0)",
+                      fontsize=8, color='dimgrey', labelpad=10)
         self._polar_cbar = self._polar_fig.colorbar(pc, ax=ax, pad=0.1)
         self._polar_cbar.set_label("Resolution (Å)", fontsize=9)
         self._polar_canvas.draw()
