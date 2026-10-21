@@ -106,6 +106,10 @@ class FSCTool(ToolInstance):
             "compares against that.<br><br>"
             "<b>Threshold</b> defaults to 0.143 for half maps and 0.5 for "
             "map-to-model, the usual conventions.<br>"
+            "<b>Sim. resolution</b> (Map vs Atomic model) defaults to "
+            "<b>Nyquist</b>, twice the pixel size \u2014 the finest detail the "
+            "sampling can represent. Lower it to match your map\u2019s actual "
+            "resolution for a like-for-like comparison.<br>"
             "<b>Pixel size</b> is read from the map header; it rescales every "
             "resolution, so check it is right.<br>"
             "<b>Mask</b> is optional, but an unmasked FSC includes solvent noise "
@@ -147,14 +151,17 @@ class FSCTool(ToolInstance):
             "circle and zenith as the radius.<br><br>"
             "<b>Color by viewing direction</b> paints the whole map one colour, "
             "the resolution along the direction you are looking from.<br>"
-            "<b>Color by reliability</b> shows the same thing on an arbitrary "
-            "+1 to -1 scale with the colours reversed. It avoids implying that "
+            "<b>Color by directional reliability</b> shows the same thing on an "
+            "arbitrary 0 to 1 scale, red meaning not reliable at all. It avoids "
+            "implying that "
             "the Angstrom value belongs to the surface you are looking at: the "
             "resolution limiting a given view lies perpendicular to it."),
     }
 
     CITATIONS = {
         "fsc": [
+            ("This plugin",
+             "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). Interactive platform for structural resolution analysis in cryogenic electron microscopy."),
             ("FSC 0.143 resolution criterion",
              "Rosenthal, P.B. &amp; Henderson, R. (2003). Optimal determination of "
              "particle orientation, absolute hand, and contrast loss in "
@@ -166,6 +173,8 @@ class FSCTool(ToolInstance):
              "doi:10.1002/pro.4792"),
         ],
         "local": [
+            ("This plugin",
+             "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). Interactive platform for structural resolution analysis in cryogenic electron microscopy."),
             ("MonoRes local resolution",
              "Vilas, J.L. et al. (2018). MonoRes: Automatic and Accurate "
              "Estimation of Local Resolution for Electron Microscopy Maps. "
@@ -176,6 +185,8 @@ class FSCTool(ToolInstance):
              "doi:10.1002/pro.4792"),
         ],
         "directional": [
+            ("This plugin",
+             "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). Interactive platform for structural resolution analysis in cryogenic electron microscopy."),
             ("Fourier Shell Occupancy and the Bingham anisotropy test",
              "Vilas, J.L., Tagare, H.D., Vargas, J., Carazo, J.M. &amp; Sorzano, "
              "C.O.S. (2023). New measures of anisotropy of cryo-EM maps. "
@@ -189,6 +200,86 @@ class FSCTool(ToolInstance):
              "doi:10.1002/pro.4792"),
         ],
     }
+
+    # Short explanations for the "?" button beside each input. Wording follows
+    # the Scipion/Xmipp protocol help where the parameter is the same one.
+    FIELD_HELP = {
+        # Global FSC
+        "fsc_map1": "First half map. Two half maps reconstructed from independent "
+                    "halves of the particle set.",
+        "fsc_map2": "Second half map. Must be on the same grid as the first.",
+        "fsc_struct": "Atomic model to compare the map against. A map is simulated "
+                      "from it with molmap, then compared to your map.",
+        "fsc_simres": "Resolution of the map simulated from the atomic model. "
+                      "Defaults to Nyquist, twice the pixel size, which is the "
+                      "finest detail the sampling can represent. Lower it to match "
+                      "your map's actual resolution if you want a like-for-like "
+                      "comparison.",
+        "fsc_mask": "Optional. Restricts the comparison to the specimen. Without a "
+                    "mask the surrounding solvent noise is included and the "
+                    "reported resolution is usually worse.",
+        "fsc_pixel": "Pixel (voxel) size in Angstrom, read from the map header. "
+                     "Every reported resolution scales with this, so check it.",
+        "fsc_thresh": "Threshold for the FSC. By default the standard 0.143. Other "
+                      "common thresholds are 0.5 and 0.3; 0.5 is conventional for "
+                      "map-to-model comparison.",
+        # Local resolution
+        "lr_map1": "Select the first half of a volume for determining its local "
+                   "resolution.",
+        "lr_map2": "Optional second half map. The noise estimate is made from the "
+                   "difference between the two halves, so providing it improves "
+                   "the estimate.",
+        "lr_mask": "The mask determines which points are specimen and which are not.",
+        "lr_pixel": "Pixel (voxel) size in Angstrom, read from the map header.",
+        "lr_maxres": "The range of resolutions to be analysed. The local resolution "
+                     "is estimated from low to high, starting here and stepping "
+                     "down towards Nyquist.",
+        "lr_step": "The resolution will be sought in steps of this value. Clamped "
+                   "to a minimum of 0.25 Angstrom.",
+        "lr_signif": "Resolution is computed using hypothesis tests; this value "
+                     "determines the significance of that test.",
+        # Directional resolution
+        "dr_half1": "Select one map for determining the directional FSC resolution.",
+        "dr_half2": "Select the second map for determining the directional FSC "
+                    "resolution. It must differ from the first: the FSC of a map "
+                    "with itself is 1 everywhere and yields no resolution.",
+        "dr_mask": "Optional. The mask determines which points are specimen and "
+                   "which are not.",
+        "dr_pixel": "Pixel (voxel) size in Angstrom, read from the map header.",
+        "dr_cone": "Angle between the axis of the cone and the generatrix. An angle "
+                   "of 17 degrees is the best angle (see Nat Methods, J.L. Vilas "
+                   "2023) to measure the directional FSCs.",
+        "dr_thresh": "Threshold for the FSC. By default the standard 0.143. Other "
+                     "common thresholds are 0.5 and 0.3.",
+        "dr_fast": "321 directions are sampled by default. The 81-direction set is "
+                   "about four times faster but samples the sphere more coarsely.",
+    }
+
+    def _with_help(self, widget, key):
+        """Put a small '?' beside an input. Hovering shows the text, clicking
+        opens it in a box for the longer ones."""
+        from Qt.QtWidgets import QToolButton
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        row.addWidget(widget, 1)
+        btn = QToolButton()
+        btn.setText("?")
+        btn.setAutoRaise(True)
+        btn.setToolTip(self.FIELD_HELP[key])
+        btn.setFixedWidth(18)
+        btn.clicked.connect(lambda: self._show_field_help(key))
+        row.addWidget(btn, 0)
+        holder = QWidget()
+        holder.setLayout(row)
+        return holder
+
+    def _show_field_help(self, key):
+        from Qt.QtWidgets import QMessageBox
+        box = QMessageBox(self.tool_window.ui_area)
+        box.setWindowTitle("What is this?")
+        box.setText(self.FIELD_HELP[key])
+        box.exec()
 
     def _make_help_row(self, key, title):
         """A Help and a Citations button, used at the top of every tab."""
@@ -213,20 +304,29 @@ class FSCTool(ToolInstance):
         box.exec()
 
     def _show_citations(self, key, title):
-        """Show the papers behind this tab, and copy them to the Log so they
-        can be pasted into a methods section."""
+        """Show the papers behind this tab, with a button to copy them in a
+        form that can be pasted straight into a reference list."""
         from Qt.QtWidgets import QMessageBox
         entries = self.CITATIONS[key]
         html = "<b>Please cite the methods you use.</b><br><br>" + "<br><br>".join(
             f"<i>{what}</i><br>{ref}" for what, ref in entries)
+        plain = "\n\n".join(ref.replace("&amp;", "&") for _what, ref in entries)
+
         box = QMessageBox(self.tool_window.ui_area)
         box.setWindowTitle(f"{title} \u2014 citations")
         box.setTextFormat(Qt.RichText)
         box.setText(html)
+        copy_btn = box.addButton("Copy citations", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Close)
         box.exec()
-        plain = "\n\n".join(
+        if box.clickedButton() is copy_btn:
+            from Qt.QtWidgets import QApplication as _QApp
+            _QApp.clipboard().setText(plain)
+            self.session.logger.status("Citations copied to the clipboard.")
+
+        annotated = "\n\n".join(
             f"{what}:\n  {ref}".replace("&amp;", "&") for what, ref in entries)
-        self.session.logger.info(f"{title} \u2014 algorithms used:\n{plain}")
+        self.session.logger.info(f"{title} \u2014 algorithms used:\n{annotated}")
 
     def _build_fsc_tab(self, layout):
         layout.addLayout(self._make_help_row('fsc', 'Global FSC'))
@@ -286,13 +386,13 @@ class FSCTool(ToolInstance):
         self._struct_label = QLabel("Atomic model:")
         self._sim_res_label = QLabel("Sim. resolution:")
 
-        form.addRow("Map 1:", self._map1_combo)
-        form.addRow(self._map2_label, self._map2_combo)
-        form.addRow(self._struct_label, self._struct_combo)
-        form.addRow(self._sim_res_label, self._sim_res_spin)
-        form.addRow("Mask (opt.):", self._mask_combo)
-        form.addRow("Pixel size:", self._pix_spin)
-        form.addRow("Threshold:", self._thresh_spin)
+        form.addRow("Map 1:", self._with_help(self._map1_combo, "fsc_map1"))
+        form.addRow(self._map2_label, self._with_help(self._map2_combo, "fsc_map2"))
+        form.addRow(self._struct_label, self._with_help(self._struct_combo, "fsc_struct"))
+        form.addRow(self._sim_res_label, self._with_help(self._sim_res_spin, "fsc_simres"))
+        form.addRow("Mask (opt.):", self._with_help(self._mask_combo, "fsc_mask"))
+        form.addRow("Pixel size:", self._with_help(self._pix_spin, "fsc_pixel"))
+        form.addRow("Threshold:", self._with_help(self._thresh_spin, "fsc_thresh"))
         layout.addLayout(form)
 
         self._compute_btn = QPushButton("Compute FSC")
@@ -431,13 +531,13 @@ class FSCTool(ToolInstance):
         self._lr_signif_spin.setValue(0.95)
 
         # Required inputs first, optional second half map after
-        form.addRow("Map 1:", self._lr_map1_combo)
-        form.addRow("Mask:", self._lr_mask_combo)
-        form.addRow("Map 2 (opt.):", self._lr_map2_combo)
-        form.addRow("Pixel size:", self._lr_pix_spin)
-        form.addRow("Max resolution:", self._lr_maxres_spin)
-        form.addRow("Step size:", self._lr_step_spin)
-        form.addRow("Significance:", self._lr_signif_spin)
+        form.addRow("Map 1:", self._with_help(self._lr_map1_combo, "lr_map1"))
+        form.addRow("Mask:", self._with_help(self._lr_mask_combo, "lr_mask"))
+        form.addRow("Map 2 (opt.):", self._with_help(self._lr_map2_combo, "lr_map2"))
+        form.addRow("Pixel size:", self._with_help(self._lr_pix_spin, "lr_pixel"))
+        form.addRow("Max resolution:", self._with_help(self._lr_maxres_spin, "lr_maxres"))
+        form.addRow("Step size:", self._with_help(self._lr_step_spin, "lr_step"))
+        form.addRow("Significance:", self._with_help(self._lr_signif_spin, "lr_signif"))
         layout.addLayout(form)
 
         self._lr_compute_btn = QPushButton("Compute Local Resolution")
@@ -962,18 +1062,18 @@ class FSCTool(ToolInstance):
         self._dr_thresh_spin.setToolTip(
             "FSC threshold a direction must exceed to count as occupied")
 
-        form.addRow("Half map 1:", self._dr_half1_combo)
-        form.addRow("Half map 2:", self._dr_half2_combo)
-        form.addRow("Mask (opt.):", self._dr_mask_combo)
-        form.addRow("Pixel size:", self._dr_pix_spin)
+        form.addRow("Half map 1:", self._with_help(self._dr_half1_combo, "dr_half1"))
+        form.addRow("Half map 2:", self._with_help(self._dr_half2_combo, "dr_half2"))
+        form.addRow("Mask (opt.):", self._with_help(self._dr_mask_combo, "dr_mask"))
+        form.addRow("Pixel size:", self._with_help(self._dr_pix_spin, "dr_pixel"))
         self._dr_fast_check = QCheckBox("Fast (81 directions instead of 321)")
         self._dr_fast_check.setToolTip(
             "321 directions by default. The 81-direction set is about 4x "
             "faster but samples the sphere more coarsely.")
 
-        form.addRow("Cone angle:", self._dr_cone_spin)
-        form.addRow("FSC threshold:", self._dr_thresh_spin)
-        form.addRow("", self._dr_fast_check)
+        form.addRow("Cone angle:", self._with_help(self._dr_cone_spin, "dr_cone"))
+        form.addRow("FSC threshold:", self._with_help(self._dr_thresh_spin, "dr_thresh"))
+        form.addRow("", self._with_help(self._dr_fast_check, "dr_fast"))
         layout.addLayout(form)
 
         self._dr_compute_btn = QPushButton("Compute Directional Resolution")
@@ -1021,11 +1121,11 @@ class FSCTool(ToolInstance):
         layout.addWidget(self._dr_view_check)
 
         self._dr_view_rel_check = QCheckBox(
-            "Color map by reliability (inverted, arbitrary +1 to -1 scale)")
+            "Color map by directional reliability (arbitrary 0 to 1 scale)")
         self._dr_view_rel_check.setToolTip(
-            "Same per-direction measurement, shown on an arbitrary reliability "
-            "scale with the colours reversed: +1 is the most reliable direction "
-            "and -1 the least. Deliberately not in Ångström, because the "
+            "Same per-direction measurement on an arbitrary 0 to 1 scale: 1 "
+            "is the most reliable direction, 0 the least, and red means not "
+            "reliable at all. Deliberately not in \u00c5ngstr\u00f6m, because the "
             "resolution limiting a given view lies perpendicular to it, so a "
             "direct resolution readout on the surface invites misreading.")
         self._dr_view_rel_check.setEnabled(False)
@@ -1157,7 +1257,7 @@ class FSCTool(ToolInstance):
         ax.set_title("Directional resolution (\u00c5)", fontsize=10, pad=12)
         # Name both polar axes in one caption below the plot. Placing them
         # inside the axes overlapped the angle ticks and the title.
-        ax.set_xlabel("angle = azimuth (\u00b0)    \u00b7    radius = zenith (\u00b0)",
+        ax.set_xlabel("angle = rot (\u00b0)    \u00b7    radius = tilt (\u00b0)",
                       fontsize=8, color='dimgrey', labelpad=10)
         self._polar_cbar = self._polar_fig.colorbar(pc, ax=ax, pad=0.1)
         self._polar_cbar.set_label("Resolution (Å)", fontsize=9)
@@ -1175,8 +1275,8 @@ class FSCTool(ToolInstance):
                                self._dr_view_check)
 
     def _on_dr_view_rel_toggled(self, checked):
-        """Colour by reliability: the same measurement on an arbitrary +1..-1
-        scale with the colours reversed."""
+        """Colour by directional reliability: the same measurement on an
+        arbitrary 0..1 scale, red meaning not reliable at all."""
         if checked and self._dr_view_check.isChecked():
             self._dr_view_check.blockSignals(True)
             self._dr_view_check.setChecked(False)
@@ -1216,9 +1316,11 @@ class FSCTool(ToolInstance):
                 'new frame', self._dr_view_frame_cb)
             grid = self._dr_dr
             if mode == 'reliability':
-                # Reversed colours on an arbitrary scale: -1 (least reliable,
-                # i.e. worst resolution) is purple, +1 is red.
-                self._show_color_key(-1.0, 1.0, "Reliability (arbitrary scale)")
+                # Arbitrary 0..1 scale with a reversed colormap, so 0 (not
+                # reliable at all, i.e. the worst resolution) shows as red.
+                self._show_color_key(0.0, 1.0,
+                                     "Directional reliability (0\u20131)",
+                                     cmap_name='rainbow_r')
             else:
                 self._show_color_key(float(np.nanmin(grid)),
                                      float(np.nanmax(grid)),
@@ -1283,16 +1385,19 @@ class FSCTool(ToolInstance):
         mode = getattr(self, "_dr_view_mode", 'resolution')
 
         if mode == 'reliability':
-            # +1 at the best resolution, -1 at the worst; colours reversed so
-            # the least reliable direction is purple rather than red.
-            reliability = 1.0 - 2.0 * (res - vmin) / span
-            frac = (reliability + 1.0) / 2.0
-            value_text = f"reliability {reliability:+.2f}  ({res:.2f} \u00c5)"
+            # 1 at the best resolution, 0 at the worst. rainbow_r puts red at
+            # 0, so the least reliable direction reads as "not reliable".
+            reliability = 1.0 - (res - vmin) / span
+            frac = reliability
+            cmap_name = 'rainbow_r'
+            value_text = (f"directional reliability {reliability:.2f}  "
+                          f"({res:.2f} \u00c5)")
         else:
             frac = mcolors.Normalize(vmin=vmin, vmax=vmax)(res)
+            cmap_name = 'rainbow'
             value_text = f"resolution {res:.2f} \u00c5"
 
-        rgba = mcm.get_cmap('rainbow')(float(frac))
+        rgba = mcm.get_cmap(cmap_name)(float(frac))
         color255 = [int(round(255 * c)) for c in rgba]
         try:
             for s_ in vol.surfaces:
@@ -1303,8 +1408,8 @@ class FSCTool(ToolInstance):
 
         # The direction is the polar coordinate pair, as read off the DR plot;
         # the resolution is reported alongside it, not as the direction itself.
-        text = (f"Direction: azimuth {azimuth:.0f}\u00b0, "
-                f"zenith {zenith:.0f}\u00b0   |   {value_text}")
+        text = (f"Direction: rot {azimuth:.0f}\u00b0, "
+                f"tilt {zenith:.0f}\u00b0   |   {value_text}")
         self._dr_view_label.setText(text)
         self._set_view_readout(text)
 
