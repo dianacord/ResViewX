@@ -151,8 +151,12 @@ class FSCTool(ToolInstance):
             "circle and zenith as the radius.<br><br>"
             "<b>Color by viewing direction</b> paints the whole map one colour, "
             "the resolution along the direction you are looking from.<br>"
-            "<b>Color by directional reliability</b> shows the same thing on an "
-            "arbitrary 0 to 1 scale, red meaning not reliable at all. It avoids "
+            "<b>Color by directional reliability</b> shows the same measurement "
+            "inverted, on an arbitrary 0 to 1 scale: purple (1) is the most "
+            "reliable view and red (0) the least. The inversion is deliberate "
+            "\u2014 the resolution limiting a given view lies perpendicular to "
+            "it, so the direction with the worst measured resolution is the one "
+            "you can trust most. Keeping it off the \u00c5ngstr\u00f6m scale avoids "
             "implying that "
             "the Angstrom value belongs to the surface you are looking at: the "
             "resolution limiting a given view lies perpendicular to it."),
@@ -1149,11 +1153,13 @@ class FSCTool(ToolInstance):
         self._dr_view_rel_check = QCheckBox(
             "Color map by directional reliability (arbitrary 0 to 1 scale)")
         self._dr_view_rel_check.setToolTip(
-            "Same per-direction measurement on an arbitrary 0 to 1 scale: 1 "
-            "is the most reliable direction, 0 the least, and red means not "
-            "reliable at all. Deliberately not in \u00c5ngstr\u00f6m, because the "
-            "resolution limiting a given view lies perpendicular to it, so a "
-            "direct resolution readout on the surface invites misreading.")
+            "Same per-direction measurement, inverted, on an arbitrary 0 to 1 "
+            "scale: 1 is the most reliable view (purple), 0 the least (red). "
+            "It is inverted because the resolution limiting what you see lies "
+            "perpendicular to the direction you look along, so the direction "
+            "whose measured resolution is worst is the one you can trust most. "
+            "Deliberately not in \u00c5ngstr\u00f6m, so the number is not read as "
+            "the resolution of the surface in front of you.")
         self._dr_view_rel_check.setEnabled(False)
         self._dr_view_rel_check.toggled.connect(self._on_dr_view_rel_toggled)
         layout.addWidget(self._dr_view_rel_check)
@@ -1329,7 +1335,9 @@ class FSCTool(ToolInstance):
             # Work on a copy, like the Local Resolution tab, so the user's own
             # half map is never recoloured.
             self._dr_stop_view_colouring()
-            vol = self._make_surface_copy(src_map, "directional resolution")
+            copy_name = ("directional reliability" if mode == 'reliability'
+                         else "directional resolution")
+            vol = self._make_surface_copy(src_map, copy_name)
             if vol is None:
                 source_check.blockSignals(True)
                 source_check.setChecked(False)
@@ -1411,9 +1419,12 @@ class FSCTool(ToolInstance):
         mode = getattr(self, "_dr_view_mode", 'resolution')
 
         if mode == 'reliability':
-            # 1 at the best resolution, 0 at the worst. rainbow_r puts red at
-            # 0, so the least reliable direction reads as "not reliable".
-            reliability = 1.0 - (res - vmin) / span
+            # Inverted on purpose. The resolution limiting what you see lies
+            # perpendicular to the direction you look along, so the direction
+            # whose measured resolution is worst corresponds to the most
+            # reliable view. Worst measured resolution -> 1 (purple, most
+            # reliable); best measured resolution -> 0 (red, not reliable).
+            reliability = (res - vmin) / span
             frac = reliability
             cmap_name = 'rainbow_r'
             value_text = (f"directional reliability {reliability:.2f}  "
