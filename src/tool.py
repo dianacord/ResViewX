@@ -205,24 +205,23 @@ class FSCTool(ToolInstance):
     # the Scipion/Xmipp protocol help where the parameter is the same one.
     FIELD_HELP = {
         # Global FSC
-        "fsc_map1": "First half map. Two half maps reconstructed from independent "
-                    "halves of the particle set.",
+        "fsc_map1": "The map being analysed. In Map vs Map this is the first of "
+                    "two half maps reconstructed from independent halves of the "
+                    "particle set; in Map vs Atomic model it is the only map "
+                    "needed, and is compared against the model.",
         "fsc_map2": "Second half map. Must be on the same grid as the first.",
-        "fsc_struct": "Atomic model to compare the map against. A map is simulated "
-                      "from it with molmap, then compared to your map.",
+        "fsc_struct": "Atomic model to compare the map against.",
         "fsc_simres": "Resolution of the map simulated from the atomic model. "
-                      "Defaults to Nyquist, twice the pixel size, which is the "
-                      "finest detail the sampling can represent. Lower it to match "
-                      "your map's actual resolution if you want a like-for-like "
-                      "comparison.",
+                      "Defaults to Nyquist, twice the pixel size.",
         "fsc_mask": "Optional. Restricts the comparison to the specimen. Without a "
                     "mask the surrounding solvent noise is included and the "
                     "reported resolution is usually worse.",
         "fsc_pixel": "Pixel (voxel) size in Angstrom, read from the map header. "
                      "Every reported resolution scales with this, so check it.",
-        "fsc_thresh": "Threshold for the FSC. By default the standard 0.143. Other "
-                      "common thresholds are 0.5 and 0.3; 0.5 is conventional for "
-                      "map-to-model comparison.",
+        "fsc_thresh": "Threshold for the FSC. Defaults to the standard 0.143 for "
+                      "Map vs Map, and to 0.5 for Map vs Atomic model, which is "
+                      "the convention for map-to-model comparison. Other common "
+                      "thresholds are 0.3 and 0.5.",
         # Local resolution
         "lr_map1": "Select the first half of a volume for determining its local "
                    "resolution.",
@@ -241,14 +240,12 @@ class FSCTool(ToolInstance):
         # Directional resolution
         "dr_half1": "Select one map for determining the directional FSC resolution.",
         "dr_half2": "Select the second map for determining the directional FSC "
-                    "resolution. It must differ from the first: the FSC of a map "
-                    "with itself is 1 everywhere and yields no resolution.",
+                    "resolution.",
         "dr_mask": "Optional. The mask determines which points are specimen and "
                    "which are not.",
         "dr_pixel": "Pixel (voxel) size in Angstrom, read from the map header.",
-        "dr_cone": "Angle between the axis of the cone and the generatrix. An angle "
-                   "of 17 degrees is the best angle (see Nat Methods, J.L. Vilas "
-                   "2023) to measure the directional FSCs.",
+        "dr_cone": "Angle between the axis of the cone and the generatrix. "
+                   "17 degrees is the default (see Nat Methods, J.L. Vilas 2023).",
         "dr_thresh": "Threshold for the FSC. By default the standard 0.143. Other "
                      "common thresholds are 0.5 and 0.3.",
         "dr_fast": "321 directions are sampled by default. The 81-direction set is "
@@ -387,9 +384,14 @@ class FSCTool(ToolInstance):
         self._sim_res_label = QLabel("Sim. resolution:")
 
         form.addRow("Map 1:", self._with_help(self._map1_combo, "fsc_map1"))
-        form.addRow(self._map2_label, self._with_help(self._map2_combo, "fsc_map2"))
-        form.addRow(self._struct_label, self._with_help(self._struct_combo, "fsc_struct"))
-        form.addRow(self._sim_res_label, self._with_help(self._sim_res_spin, "fsc_simres"))
+        # Keep the holders: hiding only the inner widget would leave its "?"
+        # button floating on its own when the mode changes.
+        self._map2_holder = self._with_help(self._map2_combo, "fsc_map2")
+        self._struct_holder = self._with_help(self._struct_combo, "fsc_struct")
+        self._sim_res_holder = self._with_help(self._sim_res_spin, "fsc_simres")
+        form.addRow(self._map2_label, self._map2_holder)
+        form.addRow(self._struct_label, self._struct_holder)
+        form.addRow(self._sim_res_label, self._sim_res_holder)
         form.addRow("Mask (opt.):", self._with_help(self._mask_combo, "fsc_mask"))
         form.addRow("Pixel size:", self._with_help(self._pix_spin, "fsc_pixel"))
         form.addRow("Threshold:", self._with_help(self._thresh_spin, "fsc_thresh"))
@@ -427,11 +429,11 @@ class FSCTool(ToolInstance):
     def _on_mode_changed(self):
         map_mode = self._mode_map.isChecked()
         self._map2_label.setVisible(map_mode)
-        self._map2_combo.setVisible(map_mode)
+        self._map2_holder.setVisible(map_mode)
         self._struct_label.setVisible(not map_mode)
-        self._struct_combo.setVisible(not map_mode)
+        self._struct_holder.setVisible(not map_mode)
         self._sim_res_label.setVisible(not map_mode)
-        self._sim_res_spin.setVisible(not map_mode)
+        self._sim_res_holder.setVisible(not map_mode)
         self._thresh_spin.setValue(0.143 if map_mode else 0.5)
 
     def _make_fsc_canvas(self):
@@ -493,12 +495,24 @@ class FSCTool(ToolInstance):
 
         pt = self._ax.plot([freq], [fsc], marker='o', markersize=5,
                            color='black', zorder=5)[0]
+
+        # Flip the label inwards near an edge so the box stays over the plot
+        x0, x1 = self._ax.get_xlim()
+        y0, y1 = self._ax.get_ylim()
+        right = freq > x0 + 0.72 * (x1 - x0)
+        high = fsc > y0 + 0.78 * (y1 - y0)
+        dx, ha = (-8, 'right') if right else (8, 'left')
+        dy, va = (-10, 'top') if high else (8, 'bottom')
+
         txt = self._ax.annotate(
             f"{res:.2f} \u00c5  ({freq:.4f} 1/\u00c5)\nFSC = {fsc:.3f}",
-            xy=(freq, fsc), xytext=(8, 8), textcoords='offset points',
-            fontsize=8, zorder=6,
+            xy=(freq, fsc), xytext=(dx, dy), textcoords='offset points',
+            ha=ha, va=va, fontsize=8, zorder=6, annotation_clip=True,
             bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow',
                       edgecolor='grey', alpha=0.95))
+        # Keep the label out of the layout calculation: constrained_layout was
+        # resizing the axes whenever the box reached near an edge.
+        txt.set_in_layout(False)
         self._fsc_click_marker = (pt, txt)
         self._canvas.draw_idle()
         self.session.logger.status(
