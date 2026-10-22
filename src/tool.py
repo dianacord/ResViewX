@@ -443,7 +443,10 @@ class FSCTool(ToolInstance):
         self._canvas = FigureCanvas(self._fig)
         self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._fsc_click_marker = None
-        self._canvas.mpl_connect('button_press_event', self._on_fsc_click)
+        self._fsc_curve = None
+        self._fsc_last_idx = None
+        self._canvas.mpl_connect('button_press_event', self._on_fsc_point)
+        self._canvas.mpl_connect('motion_notify_event', self._on_fsc_point)
         return self._canvas
 
     def _draw_empty_fsc_axes(self):
@@ -457,11 +460,24 @@ class FSCTool(ToolInstance):
         ax.legend(loc='upper right', fontsize=8)
         ax.grid(True, alpha=0.25)
 
-    def _on_fsc_click(self, event):
-        """Click anywhere on the FSC plot to read off that point."""
-        if event.inaxes is not self._ax or event.xdata is None:
+    def _on_fsc_point(self, event):
+        """Read the FSC off the curve. The reported value is taken from the
+        plotted data at the nearest frequency, not from where the pointer
+        happens to sit, so it always lies on the line."""
+        curve = getattr(self, "_fsc_curve", None)
+        if curve is None or event.inaxes is not self._ax or event.xdata is None:
             return
-        freq, fsc = float(event.xdata), float(event.ydata)
+        freqs, values = curve
+        if len(freqs) == 0:
+            return
+
+        idx = int(np.argmin(np.abs(freqs - float(event.xdata))))
+        if idx == getattr(self, "_fsc_last_idx", None):
+            return                      # same point, nothing to redraw
+        self._fsc_last_idx = idx
+
+        freq = float(freqs[idx])
+        fsc = float(values[idx])
         if freq <= 0:
             return
         res = 1.0 / freq
@@ -478,7 +494,7 @@ class FSCTool(ToolInstance):
         pt = self._ax.plot([freq], [fsc], marker='o', markersize=5,
                            color='black', zorder=5)[0]
         txt = self._ax.annotate(
-            f"{res:.2f} Å  ({freq:.4f} 1/Å)\nFSC = {fsc:.3f}",
+            f"{res:.2f} \u00c5  ({freq:.4f} 1/\u00c5)\nFSC = {fsc:.3f}",
             xy=(freq, fsc), xytext=(8, 8), textcoords='offset points',
             fontsize=8, zorder=6,
             bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow',
@@ -486,11 +502,7 @@ class FSCTool(ToolInstance):
         self._fsc_click_marker = (pt, txt)
         self._canvas.draw_idle()
         self.session.logger.status(
-            f"FSC at {res:.2f} Å ({freq:.4f} 1/Å): {fsc:.3f}")
-
-    # ==================================================================
-    # Tab 2 — Local Resolution
-    # ==================================================================
+            f"FSC at {res:.2f} \u00c5 ({freq:.4f} 1/\u00c5): {fsc:.3f}")
 
     def _build_localres_tab(self, layout):
         layout.addLayout(self._make_help_row('local', 'Local Resolution'))
@@ -1962,6 +1974,8 @@ class FSCTool(ToolInstance):
         ax = self._ax
         ax.cla()
         self._fsc_click_marker = None
+        self._fsc_last_idx = None
+        self._fsc_curve = (freq_axis, np.asarray(fsc_values[1:]))
         # Same axis convention as the FSO plot: x is spatial frequency but the
         # ticks are labelled with the resolution they correspond to.
         ax.set_xlabel("Resolution (Å)", fontsize=9)
