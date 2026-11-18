@@ -3,9 +3,9 @@ requires = ["setuptools", "ChimeraX-BundleBuilder"]
 build-backend = "chimerax.bundle_builder.cx_bundle_builder"
 
 [project]
-name = "ChimeraX-FSC"
+name = "ChimeraX-ResViewX"
 version = "1.0"
-description = "Fourier Shell Correlation plot for cryo-EM half-maps"
+description = "ResViewX: global, local and directional resolution of cryo-EM maps"
 dynamic = ["classifiers"]
 requires-python = ">=3.7"
 
@@ -19,6 +19,6 @@ categories = ["Volume Data"]
 category = "Volume Data"
 synopsis = "Compute FSC between two half-maps and display the plot"
 
-[tool.chimerax.tool."FSC Plot"]
+[tool.chimerax.tool."ResViewX"]
 category = "Volume Data"
-synopsis = "Fourier Shell Correlation plot panel"
+synopsis = "Global (FSC), local (MonoRes) and directional (FSO) resolution panel"

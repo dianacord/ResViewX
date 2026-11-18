@@ -164,7 +164,7 @@ class FSCTool(ToolInstance):
 
     CITATIONS = {
         "fsc": [
-            ("This plugin",
+            ("ResViewX (this plugin)",
              "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). Interactive platform for structural resolution analysis in cryogenic electron microscopy."),
             ("FSC 0.143 resolution criterion",
              "Rosenthal, P.B. &amp; Henderson, R. (2003). Optimal determination of "
@@ -177,7 +177,7 @@ class FSCTool(ToolInstance):
              "doi:10.1002/pro.4792"),
         ],
         "local": [
-            ("This plugin",
+            ("ResViewX (this plugin)",
              "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). Interactive platform for structural resolution analysis in cryogenic electron microscopy."),
             ("MonoRes local resolution",
              "Vilas, J.L. et al. (2018). MonoRes: Automatic and Accurate "
@@ -189,7 +189,7 @@ class FSCTool(ToolInstance):
              "doi:10.1002/pro.4792"),
         ],
         "directional": [
-            ("This plugin",
+            ("ResViewX (this plugin)",
              "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). Interactive platform for structural resolution analysis in cryogenic electron microscopy."),
             ("Fourier Shell Occupancy and the Bingham anisotropy test",
              "Vilas, J.L., Tagare, H.D., Vargas, J., Carazo, J.M. &amp; Sorzano, "

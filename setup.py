@@ -1,9 +1,9 @@
 from setuptools import setup
 
 setup(
-    name="ChimeraX-FSC",
+    name="ChimeraX-ResViewX",
     version="1.0",
-    packages=["chimerax.fsc"],
-    package_dir={"chimerax.fsc": "src"},
-    package_data={"chimerax.fsc": ["bundle_info.xml"]},
+    packages=["chimerax.resviewx"],
+    package_dir={"chimerax.resviewx": "src"},
+    package_data={"chimerax.resviewx": ["bundle_info.xml"]},
 )

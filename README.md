@@ -1,6 +1,6 @@
-# ChimeraX-FSC
+# ResViewX
 
-A [UCSF ChimeraX](https://www.rbvi.ucsf.edu/chimerax/) plugin that brings cryo-EM map
+**ResViewX** is a [UCSF ChimeraX](https://www.rbvi.ucsf.edu/chimerax/) plugin that brings cryo-EM map
 validation into the viewer where maps are actually inspected: **global Fourier Shell
 Correlation**, **local resolution**, and **directional resolution**, each with an
 interactive plot and map colouring.
@@ -29,8 +29,8 @@ run outside ChimeraX and additionally need `mrcfile` (see
 Clone the repository and install it as a ChimeraX bundle:
 
 ```bash
-git clone https://github.com/dianacord/ChimeraX-FSC.git
-cd ChimeraX-FSC
+git clone https://github.com/dianacord/ResViewX.git
+cd ResViewX
 ChimeraX --nogui --cmd "devel install . exit true"
 ```
 
@@ -52,9 +52,9 @@ usage fsc
 ```
 
 It should print the command's arguments. The panel is at
-**Tools → Volume Data → FSC Plot**.
+**Tools → Volume Data → ResViewX**.
 
-To uninstall: `toolshed uninstall ChimeraX-FSC`.
+To uninstall: `toolshed uninstall ChimeraX-ResViewX`.
 
 ---
 
@@ -221,7 +221,7 @@ scripts/                  # validation, run outside ChimeraX
 If you use this plugin, please cite the method you used as well as the plugin. The
 **Citations** button in each tab lists them and copies them to the clipboard.
 
-- **This plugin** — Cordovez, D., Vilas, J.L. & Sánchez-García, R. (in preparation).
+- **ResViewX (this plugin)** — Cordovez, D., Vilas, J.L. & Sánchez-García, R. (in preparation).
   *Interactive platform for structural resolution analysis in cryogenic electron microscopy.*
 - **FSC 0.143 criterion** — Rosenthal, P.B. & Henderson, R. (2003). *J Mol Biol* 333(4),
   721–745. doi:10.1016/j.jmb.2003.07.013
@@ -242,7 +242,7 @@ NumPy, and drafting documentation. All scientific decisions, validation and
 interpretation are the authors'.
 
 The AI is **not an author**: it cannot take responsibility for the accuracy or integrity
-of the work. Commits made with AI assistance carry an
+of the work.
 `Assisted-by:` trailer, following the convention adopted by the Linux kernel, Fedora and
 LLVM, which deliberately frames the model as a tool rather than a co-author. Earlier
 commits in this repository use a `Co-Authored-By:` trailer, which was the tool's default;

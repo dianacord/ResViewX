@@ -1,4 +1,4 @@
-"""Command registration for the FSC plugin.
+"""Command registration for the ResViewX plugin.
 
 Usage from the ChimeraX command line:
 
@@ -134,7 +134,7 @@ def fsc_command(session, maps, pixel_size=None, mask=None,
             # Reuse the panel if one is already open instead of stacking a new
             # one on every command.
             existing = session.tools.find_by_class(FSCTool)
-            tool = existing[0] if existing else FSCTool(session, "FSC Plot")
+            tool = existing[0] if existing else FSCTool(session, "ResViewX")
             # Show what was actually computed, not whatever the dropdowns held
             tool.set_fsc_inputs(map1, map2, mask_vol, pixel_size, threshold)
             tool.compute_and_show(map1, map2, pixel_size, mask_vol)
