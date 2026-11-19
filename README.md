@@ -6,7 +6,10 @@ Correlation**, **local resolution**, and **directional resolution**, each with a
 interactive plot and map colouring.
 
 The algorithms are reimplemented in pure NumPy/SciPy, so nothing beyond ChimeraX is
-required at runtime
+required at runtime.
+
+**New to ResViewX?** Follow the step-by-step [tutorial](docs/index.md), which uses a
+public EMDB map.
 
 ---
 
@@ -242,7 +245,7 @@ NumPy, and drafting documentation. All scientific decisions, validation and
 interpretation are the authors'.
 
 The AI is **not an author**: it cannot take responsibility for the accuracy or integrity
-of the work.
+of the work. Commits made with AI assistance carry an
 `Assisted-by:` trailer, following the convention adopted by the Linux kernel, Fedora and
 LLVM, which deliberately frames the model as a tool rather than a co-author. Earlier
 commits in this repository use a `Co-Authored-By:` trailer, which was the tool's default;
