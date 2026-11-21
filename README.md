@@ -260,6 +260,7 @@ validated against their reference implementations as described in
 
 ## License
 
-See the reference implementations for the licensing of the algorithms ported here
-([Vilax/monores](https://github.com/Vilax/monores),
-[I2PC/xmipp](https://github.com/I2PC/xmipp), GPL).
+ResViewX is released under the **GNU General Public License v3.0**; see
+[LICENSE](LICENSE). The algorithms ported here come from
+[Vilax/monores](https://github.com/Vilax/monores) and
+[I2PC/xmipp](https://github.com/I2PC/xmipp) (GPL).
