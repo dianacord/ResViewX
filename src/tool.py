@@ -165,7 +165,7 @@ class FSCTool(ToolInstance):
     CITATIONS = {
         "fsc": [
             ("ResViewX (this plugin)",
-             "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). Interactive platform for structural resolution analysis in cryogenic electron microscopy."),
+             "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). ResViewX: global, local and directional resolution analysis of cryo-EM maps within UCSF ChimeraX."),
             ("FSC 0.143 resolution criterion",
              "Rosenthal, P.B. &amp; Henderson, R. (2003). Optimal determination of "
              "particle orientation, absolute hand, and contrast loss in "
@@ -178,7 +178,7 @@ class FSCTool(ToolInstance):
         ],
         "local": [
             ("ResViewX (this plugin)",
-             "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). Interactive platform for structural resolution analysis in cryogenic electron microscopy."),
+             "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). ResViewX: global, local and directional resolution analysis of cryo-EM maps within UCSF ChimeraX."),
             ("MonoRes local resolution",
              "Vilas, J.L. et al. (2018). MonoRes: Automatic and Accurate "
              "Estimation of Local Resolution for Electron Microscopy Maps. "
@@ -190,7 +190,7 @@ class FSCTool(ToolInstance):
         ],
         "directional": [
             ("ResViewX (this plugin)",
-             "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). Interactive platform for structural resolution analysis in cryogenic electron microscopy."),
+             "Cordovez, D., Vilas, J.L. &amp; S\u00e1nchez-Garc\u00eda, R. (in preparation). ResViewX: global, local and directional resolution analysis of cryo-EM maps within UCSF ChimeraX."),
             ("Fourier Shell Occupancy and the Bingham anisotropy test",
              "Vilas, J.L., Tagare, H.D., Vargas, J., Carazo, J.M. &amp; Sorzano, "
              "C.O.S. (2023). New measures of anisotropy of cryo-EM maps. "

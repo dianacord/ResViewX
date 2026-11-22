@@ -145,14 +145,9 @@ Every tab has **Help** and **Citations** buttons, and a **?** beside each input.
 
 ## Performance
 
-Measured on EMD-70903 (400³ box, 0.824 Å/vox), Apple Silicon, CPU only:
-
-| | Time | Peak RAM |
-|---|---|---|
-| Global FSC | < 1 s | small |
-| Local resolution (MonoRes) | ~80 s | moderate |
-| Directional (FSO, 321 directions) | ~19 s | ~4.8 GB |
-| Directional (FSO, 81 directions) | ~9 s | ~3.1 GB |
+Everything runs on the CPU. For a 400³ map on a recent laptop, the global FSC takes a
+second or two, directional resolution under a minute, and local resolution a few
+minutes. Runtime and memory across box sizes and processors are reported in the paper.
 
 FFTs are spread across CPU cores with `scipy.fft(workers=-1)`, and the long computations
 run on a background thread so the interface stays responsive. Rotating the map in
@@ -225,7 +220,8 @@ If you use this plugin, please cite the method you used as well as the plugin. T
 **Citations** button in each tab lists them and copies them to the clipboard.
 
 - **ResViewX (this plugin)** — Cordovez, D., Vilas, J.L. & Sánchez-García, R. (in preparation).
-  *Interactive platform for structural resolution analysis in cryogenic electron microscopy.*
+  *ResViewX: global, local and directional resolution analysis of cryo-EM maps within UCSF
+  ChimeraX.*
 - **FSC 0.143 criterion** — Rosenthal, P.B. & Henderson, R. (2003). *J Mol Biol* 333(4),
   721–745. doi:10.1016/j.jmb.2003.07.013
 - **MonoRes** — Vilas, J.L. et al. (2018). *Structure* 26(2), 337–344.e4.
@@ -260,7 +256,7 @@ validated against their reference implementations as described in
 
 ## License
 
-ResViewX is released under the **GNU General Public License v3.0**; see
-[LICENSE](LICENSE). The algorithms ported here come from
+ResViewX is released under the **GNU General Public License, version 3 or (at your
+option) any later version** (GPL-3.0-or-later); see [LICENSE](LICENSE). The algorithms ported here come from
 [Vilax/monores](https://github.com/Vilax/monores) and
 [I2PC/xmipp](https://github.com/I2PC/xmipp) (GPL).
