@@ -8,7 +8,7 @@ interactive plot and map colouring.
 The algorithms are reimplemented in pure NumPy/SciPy, so nothing beyond ChimeraX is
 required at runtime.
 
-**New to ResViewX?** Follow the step-by-step [tutorial](docs/index.md), which uses a
+**New to ResViewX?** Follow the step-by-step [tutorial](https://dianacord.github.io/ResViewX/), which uses a
 public EMDB map.
 
 ---
